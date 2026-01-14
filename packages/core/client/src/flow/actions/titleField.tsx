@@ -41,7 +41,7 @@ export const titleField = defineAction({
     return (
       !ctx.collectionField ||
       !ctx.collectionField.isAssociationField() ||
-      (ctx.model.subModels.field as any).disableTitleField
+      (ctx.model.subModels.field as any)?.disableTitleField
     );
   },
   beforeParamsSave: async (ctx: any, params, previousParams) => {
