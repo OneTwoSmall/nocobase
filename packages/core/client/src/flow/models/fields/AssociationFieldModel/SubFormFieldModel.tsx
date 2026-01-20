@@ -216,9 +216,7 @@ const ArrayNester = ({
                 });
 
                 currentFork.context.defineProperty('currentObject', {
-                  get: () => {
-                    return currentFork.context.form.getFieldValue([name, fieldName]) || {};
-                  },
+                  get: () => currentFork.context.form.getFieldValue([name, fieldName]) || {},
                   cache: false,
                   meta: createAssociationAwareObjectMetaFactory(
                     () => currentFork.context.collection,
@@ -241,10 +239,7 @@ const ArrayNester = ({
                         <div style={{ textAlign: 'right' }}>
                           <Tooltip title={t('Remove')}>
                             <CloseOutlined
-                              style={{
-                                zIndex: 1000,
-                                color: '#a8a3a3',
-                              }}
+                              style={{ zIndex: 1000, color: '#a8a3a3' }}
                               onClick={() => {
                                 remove(index);
                                 const gridFork = forksRef.current[key];
