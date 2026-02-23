@@ -9,9 +9,9 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { css } from '@emotion/css';
-import { TableBlockModel, useAPIClient } from '@nocobase/client';
+import { TableBlockModel, useAPIClient, useTableBlockContext, useCollection_deprecated } from '@nocobase/client';
 import { tExpr } from '@nocobase/flow-engine';
-import { observer } from '@formily/react';
+import { observer, useFieldSchema } from '@formily/react';
 
 const wrapperCss = css`
   position: relative;
@@ -33,28 +33,30 @@ function getNumberFromText(text: string) {
   return numStr ? parseFloat(numStr[0]) : null;
 }
 
-export const EnhancedTableWrapper = observer(({ model, children }: { model: any; children: React.ReactNode }) => {
+export const EnhancedTableWrapper = observer(({ model, children }: { model?: any; children: React.ReactNode }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [selectionSum, setSelectionSum] = useState<number | null>(null);
   const api = useAPIClient();
   const [allPagesData, setAllPagesData] = useState<any[]>([]);
 
-  const config = model.props.summaryConfig || {};
-  const columns = typeof model.getColumns === 'function' ? model.getColumns() : [];
+  // V1 Fallbacks
+  const blockContext = useTableBlockContext();
+  const collection = useCollection_deprecated();
+  const fieldSchema = useFieldSchema();
+  const isV1 = !model;
 
-  const requestParams = (model.resource as any)?.request?.params;
+  const config = isV1 ? fieldSchema?.['x-decorator-props']?.summaryConfig || {} : model?.props?.summaryConfig || {};
+
+  const requestParams = isV1 ? blockContext?.service?.params?.[0] : (model?.resource as any)?.request?.params;
+
   const paramsStr = JSON.stringify(requestParams || {});
-  // When the user edits or adds a row, the underlying resource data updates.
-  // Since EnhancedTableWrapper is an `observer`, `model.resource.getData?.()` will trigger a re-render.
-  // By passing it into the dependency list (stringified or length-checked), we can re-trigger our allPagesData fetch.
-  const resourceDataStr = JSON.stringify(model.resource?.getData?.() || []);
+
+  const resourceDataStr = isV1
+    ? JSON.stringify(blockContext?.service?.data?.data || [])
+    : JSON.stringify(model?.resource?.getData?.() || []);
 
   useEffect(() => {
-    if (
-      Object.keys(config).length === 0 ||
-      typeof model.resource?.runAction !== 'function' ||
-      typeof model.resource?.getRefreshRequestOptions !== 'function'
-    ) {
+    if (Object.keys(config).length === 0) {
       setAllPagesData([]);
       return;
     }
@@ -62,24 +64,61 @@ export const EnhancedTableWrapper = observer(({ model, children }: { model: any;
     let isMounted = true;
     const fetchAllData = async () => {
       try {
-        const currentOptions = model.resource.getRefreshRequestOptions();
-        const response = await model.resource.runAction('list', {
-          method: 'get',
-          ...currentOptions,
-          params: {
-            ...(currentOptions?.params || {}),
+        if (isV1 && blockContext?.service) {
+          // V1 API Call
+          const requestParams = {
+            ...(blockContext.service.params?.[0] || {}),
             paginate: false,
-          },
-        });
-
-        if (isMounted) {
-          let rows: any[] = [];
-          if (response && Array.isArray(response.data)) {
-            rows = response.data;
-          } else if (response && Array.isArray(response)) {
-            rows = response;
+          };
+          let responseData;
+          if (blockContext.resource && typeof blockContext.resource.list === 'function') {
+            const response = await blockContext.resource.list(requestParams);
+            responseData = response?.data;
+          } else {
+            const resourceName =
+              typeof blockContext.resource === 'string'
+                ? blockContext.resource
+                : blockContext.association || blockContext.collection;
+            if (!resourceName) return;
+            const response = await api.request({
+              url: `${resourceName}:list`,
+              params: requestParams,
+            });
+            responseData = response?.data;
           }
-          setAllPagesData(rows);
+
+          if (isMounted) {
+            let rows: any[] = [];
+            if (Array.isArray(responseData)) {
+              rows = responseData;
+            } else if (responseData && Array.isArray(responseData.data)) {
+              rows = responseData.data;
+            } else if (responseData && Array.isArray(responseData.rows)) {
+              rows = responseData.rows;
+            }
+            setAllPagesData(rows);
+          }
+        } else if (!isV1 && typeof model?.resource?.runAction === 'function') {
+          // V2 API Call
+          const currentOptions = model.resource.getRefreshRequestOptions();
+          const response = await model.resource.runAction('list', {
+            method: 'get',
+            ...currentOptions,
+            params: {
+              ...(currentOptions?.params || {}),
+              paginate: false,
+            },
+          });
+
+          if (isMounted) {
+            let rows: any[] = [];
+            if (response && Array.isArray(response.data)) {
+              rows = response.data;
+            } else if (response && Array.isArray(response)) {
+              rows = response;
+            }
+            setAllPagesData(rows);
+          }
         }
       } catch (err) {
         console.error('EnhancedTable fetchAllData Error: ', err);
@@ -90,7 +129,7 @@ export const EnhancedTableWrapper = observer(({ model, children }: { model: any;
     return () => {
       isMounted = false;
     };
-  }, [model.resource, paramsStr, JSON.stringify(config), resourceDataStr]);
+  }, [model, paramsStr, JSON.stringify(config), resourceDataStr, isV1]);
 
   // Track selection state in a ref so event listeners don't need to be recreated (which broke dragging)
   const selectionState = useRef({
@@ -223,7 +262,14 @@ export const EnhancedTableWrapper = observer(({ model, children }: { model: any;
   }, []);
 
   const columnTitles: Record<string, string> = {};
-  if (typeof model.mapSubModels === 'function') {
+  if (isV1 && collection) {
+    Object.keys(config).forEach((name) => {
+      const field = collection.getField(name);
+      if (field) {
+        columnTitles[name] = field.uiSchema?.title || field.title || field.name || name;
+      }
+    });
+  } else if (!isV1 && typeof model?.mapSubModels === 'function') {
     model.mapSubModels('columns', (column: any) => {
       const collectionField = column?.collectionField;
       if (collectionField) {
@@ -236,7 +282,7 @@ export const EnhancedTableWrapper = observer(({ model, children }: { model: any;
     <div className={wrapperCss} ref={containerRef}>
       <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>{children}</div>
 
-      {Object.keys(config).length > 0 && (
+      {true && (
         <div
           style={{
             display: 'flex',
@@ -250,7 +296,7 @@ export const EnhancedTableWrapper = observer(({ model, children }: { model: any;
           }}
         >
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <span style={{ color: '#000', fontWeight: 'bold' }}>合计行</span>
+            <span style={{ color: '#000', fontWeight: 'bold' }}>合计</span>
           </div>
 
           {selectionSum !== null && (
@@ -329,12 +375,12 @@ EnhancedTableBlockModel.registerFlow({
             const isNumeric =
               ['integer', 'bigInt', 'float', 'double', 'decimal', 'number'].includes(collectionField.type) ||
               ['number', 'integer', 'percent', 'currency'].includes(collectionField.interface);
-
-            columnsToSelect.push({
-              label: column.props?.title || collectionField.title || collectionField.name,
-              value: collectionField.name,
-              disabled: !isNumeric,
-            });
+            if (isNumeric) {
+              columnsToSelect.push({
+                label: column.props?.title || collectionField.title || collectionField.name,
+                value: collectionField.name,
+              });
+            }
           });
         }
 
