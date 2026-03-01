@@ -102,12 +102,7 @@ export class PluginAIServer extends Plugin {
   registerTools() {
     const toolsManager = this.ai.toolsManager;
 
-    const docsModulesDescription = describeDocModules('Docs modules unavailable. Run ai:create-docs-index first.');
-
-    toolsManager.registerTools([
-      createDocsSearchTool({ description: docsModulesDescription }),
-      createReadDocEntryTool(),
-    ]);
+    toolsManager.registerTools([createDocsSearchTool(), createReadDocEntryTool()]);
 
     toolsManager.registerDynamicTools(getWorkflowCallers(this, 'workflowCaller'));
   }
@@ -160,6 +155,8 @@ export class PluginAIServer extends Plugin {
 
     this.app.acl.allow('aiEmployees', 'listByUser', 'loggedIn');
     this.app.acl.allow('aiEmployees', 'updateUserPrompt', 'loggedIn');
+
+    this.app.acl.allow('aiTools', 'list', 'loggedIn');
 
     const workflowSnippet = this.app.acl.snippetManager.snippets.get('pm.workflow.workflows');
     if (workflowSnippet) {
