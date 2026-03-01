@@ -12,6 +12,7 @@ import { css } from '@emotion/css';
 import { TableBlockModel, useAPIClient, useTableBlockContext, useCollection_deprecated } from '@nocobase/client';
 import { tExpr } from '@nocobase/flow-engine';
 import { observer, useFieldSchema } from '@formily/react';
+import { useTranslation } from 'react-i18next';
 
 const wrapperCss = css`
   position: relative;
@@ -27,12 +28,17 @@ const wrapperCss = css`
 
 export const EnhancedTableWrapper = observer(({ model, children }: { model?: any; children: React.ReactNode }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [selectionStats, setSelectionStats] = useState<{ min: number; max: number; avg: number; count: number } | null>(
-    null,
-  );
+  const [selectionStats, setSelectionStats] = useState<{
+    sum: number;
+    min: number;
+    max: number;
+    avg: number;
+    count: number;
+  } | null>(null);
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
   const api = useAPIClient();
   const [allPagesData, setAllPagesData] = useState<any[]>([]);
+  const { t } = useTranslation(['@nocobase/plugin-enhanced-table-block/client', 'client'], { nsMode: 'fallback' });
 
   // V1 Fallbacks
   const blockContext = useTableBlockContext();
@@ -249,7 +255,7 @@ export const EnhancedTableWrapper = observer(({ model, children }: { model?: any
         const max = Math.max(...selectedNumbers);
         const min = Math.min(...selectedNumbers);
         const avg = sum / selectedNumbers.length;
-        setSelectionStats({ min, max, avg, count: selectedNumbers.length });
+        setSelectionStats({ sum, min, max, avg, count: selectedNumbers.length });
       } else {
         setSelectionStats(null);
         setMousePos(null);
@@ -345,7 +351,9 @@ export const EnhancedTableWrapper = observer(({ model, children }: { model?: any
           }}
         >
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <span style={{ color: '#000', fontWeight: 'bold' }}>汇总行</span>
+            <span style={{ color: '#000', fontWeight: 'bold' }}>
+              {t('Summary row', { ns: '@nocobase/plugin-enhanced-table-block/client' })}
+            </span>
           </div>
 
           <div style={{ display: 'flex', gap: '24px', overflowX: 'auto', flex: 1, justifyContent: 'flex-end' }}>
@@ -377,7 +385,13 @@ export const EnhancedTableWrapper = observer(({ model, children }: { model?: any
                 }
               }
 
-              const typeLabels: any = { sum: '求和', avg: '平均', count: '计数', max: '最大', min: '最小' };
+              const typeLabels: any = {
+                sum: t('Sum', { ns: '@nocobase/plugin-enhanced-table-block/client' }),
+                avg: t('Average', { ns: '@nocobase/plugin-enhanced-table-block/client' }),
+                count: t('Count', { ns: '@nocobase/plugin-enhanced-table-block/client' }),
+                max: t('Max', { ns: '@nocobase/plugin-enhanced-table-block/client' }),
+                min: t('Min', { ns: '@nocobase/plugin-enhanced-table-block/client' }),
+              };
 
               return (
                 <div key={dataIndex} style={{ display: 'flex', alignItems: 'baseline', gap: '4px', color: '#000' }}>
@@ -414,18 +428,25 @@ export const EnhancedTableWrapper = observer(({ model, children }: { model?: any
           <div
             style={{ fontWeight: 'bold', marginBottom: '4px', borderBottom: '1px solid #eee', paddingBottom: '4px' }}
           >
-            圈选统计 (包含 {selectionStats.count} 个单元格)
+            {t('Selection stats (contains {{num}} cells)', {
+              ns: '@nocobase/plugin-enhanced-table-block/client',
+              num: selectionStats.count,
+            })}
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
-            <span>最大值：</span>
+            <span>{t('Sum', { ns: '@nocobase/plugin-enhanced-table-block/client' })}：</span>
+            <strong>{Number.isInteger(selectionStats.sum) ? selectionStats.sum : selectionStats.sum.toFixed(2)}</strong>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+            <span>{t('Max', { ns: '@nocobase/plugin-enhanced-table-block/client' })}：</span>
             <strong>{Number.isInteger(selectionStats.max) ? selectionStats.max : selectionStats.max.toFixed(2)}</strong>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
-            <span>最小值：</span>
+            <span>{t('Min', { ns: '@nocobase/plugin-enhanced-table-block/client' })}：</span>
             <strong>{Number.isInteger(selectionStats.min) ? selectionStats.min : selectionStats.min.toFixed(2)}</strong>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
-            <span>平均值：</span>
+            <span>{t('Average', { ns: '@nocobase/plugin-enhanced-table-block/client' })}：</span>
             <strong>{Number.isInteger(selectionStats.avg) ? selectionStats.avg : selectionStats.avg.toFixed(2)}</strong>
           </div>
         </div>
@@ -444,10 +465,10 @@ export class EnhancedTableBlockModel extends TableBlockModel {
 EnhancedTableBlockModel.registerFlow({
   key: 'enhancedTableSettings',
   sort: 600,
-  title: `{{t("Enhanced table settings", { ns: "@nocobase/plugin-enhanced-table-block/client", defaultValue: "增强表格设置" })}}`,
+  title: `{{t("Enhanced table settings", { ns: "@nocobase/plugin-enhanced-table-block/client" })}}`,
   steps: {
     summaryConfig: {
-      title: `{{t("Summary row settings", { ns: "@nocobase/plugin-enhanced-table-block/client", defaultValue: "汇总行设置" })}}`,
+      title: `{{t("Summary row settings", { ns: "@nocobase/plugin-enhanced-table-block/client" })}}`,
       uiSchema: (ctx) => {
         const columnsToSelect: { label: string; value: string; disabled?: boolean }[] = [];
         if (typeof ctx.model.mapSubModels === 'function') {
@@ -483,23 +504,23 @@ EnhancedTableBlockModel.registerFlow({
                     allowClear: true,
                     options: [
                       {
-                        label: `{{t("Sum", { ns: "@nocobase/plugin-enhanced-table-block/client", defaultValue: "求和" })}}`,
+                        label: `{{t("Sum", { ns: "@nocobase/plugin-enhanced-table-block/client" })}}`,
                         value: 'sum',
                       },
                       {
-                        label: `{{t("Average", { ns: "@nocobase/plugin-enhanced-table-block/client", defaultValue: "平均" })}}`,
+                        label: `{{t("Average", { ns: "@nocobase/plugin-enhanced-table-block/client" })}}`,
                         value: 'avg',
                       },
                       {
-                        label: `{{t("Count", { ns: "@nocobase/plugin-enhanced-table-block/client", defaultValue: "计数" })}}`,
+                        label: `{{t("Count", { ns: "@nocobase/plugin-enhanced-table-block/client" })}}`,
                         value: 'count',
                       },
                       {
-                        label: `{{t("Min", { ns: "@nocobase/plugin-enhanced-table-block/client", defaultValue: "最小值" })}}`,
+                        label: `{{t("Min", { ns: "@nocobase/plugin-enhanced-table-block/client" })}}`,
                         value: 'min',
                       },
                       {
-                        label: `{{t("Max", { ns: "@nocobase/plugin-enhanced-table-block/client", defaultValue: "最大值" })}}`,
+                        label: `{{t("Max", { ns: "@nocobase/plugin-enhanced-table-block/client" })}}`,
                         value: 'max',
                       },
                     ],
@@ -522,10 +543,10 @@ EnhancedTableBlockModel.registerFlow({
 });
 
 EnhancedTableBlockModel.define({
-  label: `{{t("Enhanced Table", { ns: "@nocobase/plugin-enhanced-table-block/client", defaultValue: "增强表格" })}}`,
-  group: `{{t("Content", { ns: "@nocobase/plugin-enhanced-table-block/client", defaultValue: "内容区块" })}}`,
+  label: `{{t("Enhanced Table", { ns: "@nocobase/plugin-enhanced-table-block/client" })}}`,
+  group: `{{t("Content", { ns: "@nocobase/plugin-enhanced-table-block/client" })}}`,
   searchable: true,
-  searchPlaceholder: `{{t("Search", { ns: "@nocobase/plugin-enhanced-table-block/client", defaultValue: "搜索" })}}`,
+  searchPlaceholder: `{{t("Search", { ns: "@nocobase/plugin-enhanced-table-block/client" })}}`,
   createModelOptions: () => ({
     use: 'EnhancedTableBlockModel',
     subModels: {
