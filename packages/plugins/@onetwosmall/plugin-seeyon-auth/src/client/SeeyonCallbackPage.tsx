@@ -99,7 +99,13 @@ export default function SeeyonCallbackPage() {
   const marker = '/seeyon-auth/callback';
   const markerIdx = location.pathname.indexOf(marker);
   const appPrefix = markerIdx > 0 ? location.pathname.substring(0, markerIdx) : '';
-  const customPath = markerIdx !== -1 ? location.pathname.substring(markerIdx + marker.length).replace(/^\//, '') : '';
+  const customPath =
+    markerIdx !== -1
+      ? (() => {
+          const raw = location.pathname.substring(markerIdx + marker.length).replace(/^\//, '');
+          return /^(?:[a-zA-Z0-9_\-/.]+)?$/.test(raw) ? raw : '';
+        })()
+      : '';
 
   useEffect(() => {
     document.title = '致远OA 单点登录';

@@ -174,22 +174,27 @@ function parseCallbackPath(path: string) {
     if (idx === -1) continue;
     const after = path.substring(idx + suffix.length);
     if (after !== '' && !after.startsWith('/')) continue;
+    let customPath = after.startsWith('/') ? after.substring(1) : after;
+    if (/\.\.(\\|\/)/.test(customPath) || /\.\.$/.test(customPath)) {
+      customPath = '';
+    }
     return {
       appPrefix: path.substring(0, idx),
       isV2: suffix.startsWith('/v/'),
-      customPath: after.startsWith('/') ? after.substring(1) : after,
+      customPath,
     };
   }
   return null;
 }
 
 function renderCallbackHTML(opts: { base: string; customPath: string; token: string | null }) {
-  const { base, customPath, token } = opts;
+  const { base, token } = opts;
+  const safePath = /^[a-zA-Z0-9_\-/.]+$/.test(opts.customPath) ? opts.customPath : '';
   const homeUrl = `${base}/`;
   const signinUrl = `${base}/signin?error=invalid_ticket`;
   const targetUrl = token
-    ? customPath
-      ? `${base}/${customPath}?token=${encodeURIComponent(token)}`
+    ? safePath
+      ? `${base}/${safePath}?token=${encodeURIComponent(token)}`
       : `${base}/?token=${encodeURIComponent(token)}`
     : signinUrl;
   const title = token ? '验证成功 - 致远OA 单点登录' : '认证失败 - 致远OA 单点登录';
