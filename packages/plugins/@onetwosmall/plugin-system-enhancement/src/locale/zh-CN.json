@@ -43,5 +43,10 @@
   "Top Right": "右上",
   "Bottom Left": "左下",
   "Bottom Right": "右下",
-  "Default": "默认"
+  "Default": "默认",
+  "Logo Link": "Logo 链接",
+  "Logo Link URL": "Logo 绑定网址",
+  "Only relative paths within the current system are allowed": "仅允许当前系统内的相对路径",
+  "Only relative paths within the current system are allowed for the logo link": "Logo 绑定的网址仅允许当前系统内的相对路径",
+  "Logo Link URL help": "填写后，点击系统左上角的 Logo 将跳转到该相对路径（如 /admin）；留空则不跳转。仅允许当前系统内的相对路径。"
 }

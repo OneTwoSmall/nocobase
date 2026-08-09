@@ -13,6 +13,7 @@ import React from 'react';
 import { NAMESPACE } from './constants';
 import { ResizableHeader } from './ResizableHeader';
 import { applyStyles, type LoginPageStyleSettings } from './loginPageStyleInjector';
+import { applyLogoLink } from './logoLinkInjector';
 
 let enableTableColumnResize = true;
 
@@ -43,6 +44,13 @@ export class PluginSystemEnhancementClientV2 extends Plugin<any> {
       aclSnippet: `pm.${NAMESPACE}.settings`,
       componentLoader: () => import('./pages/LoginPageSettings'),
     });
+    self.pluginSettingsManager.addPageTabItem({
+      menuKey: NAMESPACE,
+      key: 'logo-link',
+      title: this.t('Logo Link'),
+      aclSnippet: `pm.${NAMESPACE}.settings`,
+      componentLoader: () => import('./pages/LogoLinkSettings'),
+    });
 
     try {
       const res = await self.context.api.request({
@@ -54,6 +62,7 @@ export class PluginSystemEnhancementClientV2 extends Plugin<any> {
       enableTableColumnResize = data?.enableTableColumnResize !== false;
       if (data) {
         applyStyles(data as LoginPageStyleSettings);
+        applyLogoLink(data?.logoLinkUrl || '', () => self.context.router?.navigate);
       }
     } catch {
       /* default */

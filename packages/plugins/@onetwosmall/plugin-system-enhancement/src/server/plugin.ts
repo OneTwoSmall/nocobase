@@ -8,6 +8,9 @@
  */
 
 import { Plugin } from '@nocobase/server';
+import { isSafeRelativeUrl } from './urlValidator';
+// @ts-ignore
+import pkg from '../../package.json';
 
 export class PluginSystemEnhancementServer extends Plugin {
   async afterAdd() {}
@@ -19,7 +22,38 @@ export class PluginSystemEnhancementServer extends Plugin {
     });
 
     this.app.acl.allow('systemEnhancementSettings', 'get', 'public');
-    this.app.acl.allow('systemEnhancementSettings', 'update', 'loggedIn');
+    // 仅拥有系统内置“界面配置权限”（ui.* snippet）的角色可修改系统级设置
+    this.app.acl.allowManager.registerAllowCondition('se.allowConfigure', async (ctx) => {
+      const roleName = ctx.state.currentRole;
+      if (!roleName) {
+        return false;
+      }
+      const role = this.app.acl.getRole(roleName);
+      if (!role) {
+        return false;
+      }
+      const { allowed } = role.effectiveSnippets();
+      return allowed.some((name) => name.startsWith('ui.'));
+    });
+    this.app.acl.allow('systemEnhancementSettings', 'update', 'se.allowConfigure');
+
+    this.app.db.on('systemEnhancementSettings.beforeCreate', (model) => {
+      this.assertLogoLinkUrlSafe(model);
+    });
+    this.app.db.on('systemEnhancementSettings.beforeUpdate', (model) => {
+      this.assertLogoLinkUrlSafe(model);
+    });
+  }
+
+  assertLogoLinkUrlSafe(model: any) {
+    if (!model.changed('logoLinkUrl') || isSafeRelativeUrl(model.get('logoLinkUrl'))) {
+      return;
+    }
+    throw new Error(
+      this.app.i18n.t('Only relative paths within the current system are allowed for the logo link', {
+        ns: pkg.name,
+      }),
+    );
   }
 
   async load() {}
@@ -41,6 +75,7 @@ export class PluginSystemEnhancementServer extends Plugin {
             loginBackgroundSize: 'cover',
             loginBackgroundRepeat: 'no-repeat',
             loginBackgroundPosition: 'center',
+            logoLinkUrl: '',
           },
         });
       }
