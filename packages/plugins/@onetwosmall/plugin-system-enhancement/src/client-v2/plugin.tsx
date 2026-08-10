@@ -14,6 +14,7 @@ import { NAMESPACE } from './constants';
 import { ResizableHeader } from './ResizableHeader';
 import { applyStyles, type LoginPageStyleSettings } from './loginPageStyleInjector';
 import { applyLogoLink } from './logoLinkInjector';
+import { EnhancedTableBlockModel, setEnhancedTableEnabled } from './enhanced-table/EnhancedTableBlockModel';
 
 let enableTableColumnResize = true;
 
@@ -24,6 +25,8 @@ export function setTableColumnResizeEnabled(enabled: boolean) {
 export class PluginSystemEnhancementClientV2 extends Plugin<any> {
   async load() {
     const self = this as any;
+
+    this.flowEngine.registerModels({ EnhancedTableBlockModel });
 
     self.pluginSettingsManager.addMenuItem({
       key: NAMESPACE,
@@ -60,6 +63,7 @@ export class PluginSystemEnhancementClientV2 extends Plugin<any> {
       });
       const data = res?.data?.data;
       enableTableColumnResize = data?.enableTableColumnResize !== false;
+      setEnhancedTableEnabled(data?.enableEnhancedTable !== false);
       if (data) {
         applyStyles(data as LoginPageStyleSettings);
         applyLogoLink(data?.logoLinkUrl || '', () => self.context.router?.navigate);

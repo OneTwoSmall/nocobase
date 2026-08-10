@@ -13,6 +13,7 @@ import { useFlowContext } from '@nocobase/flow-engine';
 import { useRequest } from 'ahooks';
 import { useT } from '../locale';
 import { setTableColumnResizeEnabled } from '../plugin';
+import { setEnhancedTableEnabled } from '../enhanced-table/EnhancedTableBlockModel';
 
 export default function TableEnhancementSettings() {
   const ctx = useFlowContext();
@@ -57,6 +58,7 @@ export default function TableEnhancementSettings() {
         onValuesChange={(_, values) => {
           if (initializedRef.current) {
             setTableColumnResizeEnabled(values.enableTableColumnResize);
+            setEnhancedTableEnabled(values.enableEnhancedTable !== false);
             save(values);
           }
         }}
@@ -64,6 +66,12 @@ export default function TableEnhancementSettings() {
         <Space>
           <span>{t('Enable table column drag resize')}</span>
           <Form.Item name="enableTableColumnResize" valuePropName="checked" noStyle>
+            <Switch disabled={saving} />
+          </Form.Item>
+        </Space>
+        <Space>
+          <span>{t('Enable enhanced table')}</span>
+          <Form.Item name="enableEnhancedTable" valuePropName="checked" noStyle>
             <Switch disabled={saving} />
           </Form.Item>
         </Space>

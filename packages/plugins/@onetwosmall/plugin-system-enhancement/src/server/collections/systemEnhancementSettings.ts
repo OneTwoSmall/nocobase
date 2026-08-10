@@ -28,5 +28,6 @@ export default defineCollection({
     { name: 'loginBackgroundRepeat', type: 'string', defaultValue: 'no-repeat' },
     { name: 'loginBackgroundPosition', type: 'string', defaultValue: 'center' },
     { name: 'logoLinkUrl', type: 'string', defaultValue: '' },
+    { name: 'enableEnhancedTable', type: 'boolean', defaultValue: true },
   ],
 });

@@ -76,6 +76,7 @@ export class PluginSystemEnhancementServer extends Plugin {
             loginBackgroundRepeat: 'no-repeat',
             loginBackgroundPosition: 'center',
             logoLinkUrl: '',
+            enableEnhancedTable: true,
           },
         });
       }

@@ -11,6 +11,7 @@ import React, { useRef } from 'react';
 import { Card, Form, Switch, Space, message } from 'antd';
 import { useAPIClient, useRequest } from '@nocobase/client';
 import { useT } from '../locale';
+import { setEnhancedTableEnabled } from '../enhanced-table/EnhancedTableV1Wrapper';
 
 export default function TableEnhancementSettings() {
   const api = useAPIClient();
@@ -25,6 +26,7 @@ export default function TableEnhancementSettings() {
         const data = response?.data?.data;
         if (data) {
           form.setFieldsValue(data);
+          setEnhancedTableEnabled(data.enableEnhancedTable !== false);
           initializedRef.current = true;
         }
       },
@@ -51,6 +53,7 @@ export default function TableEnhancementSettings() {
         initialValues={{ enableTableColumnResize: true }}
         onValuesChange={(_, values) => {
           if (initializedRef.current) {
+            setEnhancedTableEnabled(values.enableEnhancedTable !== false);
             save(values);
           }
         }}
@@ -58,6 +61,12 @@ export default function TableEnhancementSettings() {
         <Space>
           <span>{t('Enable table column drag resize')}</span>
           <Form.Item name="enableTableColumnResize" valuePropName="checked" noStyle>
+            <Switch disabled={saving} />
+          </Form.Item>
+        </Space>
+        <Space>
+          <span>{t('Enable enhanced table')}</span>
+          <Form.Item name="enableEnhancedTable" valuePropName="checked" noStyle>
             <Switch disabled={saving} />
           </Form.Item>
         </Space>
