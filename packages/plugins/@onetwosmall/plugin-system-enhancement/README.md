@@ -73,3 +73,10 @@ yarn eslint --fix packages/plugins/@onetwosmall/plugin-system-enhancement/src
 - Add login page customization
 - Add logo link navigation (relative-path validation)
 - Add the enhanced table block with a summary row and cell selection stats (standalone block)
+
+## License
+
+Copyright © 2026 OneTwoSmall
+
+This project is dual-licensed under AGPL-3.0 and a commercial license.
+For commercial licensing (e.g., closed-source deployment), please contact: moonship1011@gmail.com.

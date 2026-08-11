@@ -73,3 +73,10 @@ yarn eslint --fix packages/plugins/@onetwosmall/plugin-system-enhancement/src
 - 新增登录页自定义
 - 新增 Logo 链接导航（相对路径校验）
 - 新增增强表格区块（汇总行 + 圈选统计，独立区块形态）
+
+## 许可证
+
+版权所有 © 2026 OneTwoSmall
+
+本项目采用双许可：AGPL-3.0 与商业授权。
+商业授权（如闭源部署）请联系：moonship1011@gmail.com。
