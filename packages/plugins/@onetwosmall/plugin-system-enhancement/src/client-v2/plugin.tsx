@@ -12,7 +12,7 @@ import { Plugin } from '@nocobase/client-v2';
 import React from 'react';
 import { NAMESPACE } from './constants';
 import { ResizableHeader } from './ResizableHeader';
-import { applyStyles, type LoginPageStyleSettings } from './loginPageStyleInjector';
+import { applyStyles, setApiBaseUrl, type LoginPageStyleSettings } from './loginPageStyleInjector';
 import { applyLogoLink } from './logoLinkInjector';
 import { EnhancedTableBlockModel, setEnhancedTableEnabled } from './enhanced-table/EnhancedTableBlockModel';
 
@@ -58,10 +58,10 @@ export class PluginSystemEnhancementClientV2 extends Plugin<any> {
     });
 
     try {
+      setApiBaseUrl(self.context.api.axios.defaults.baseURL);
       const res = await self.context.api.request({
         url: 'systemEnhancementSettings:get/1',
         method: 'get',
-        params: { appends: ['loginBackgroundImage'] },
       });
       const data = res?.data?.data;
       enableTableColumnResize = data?.enableTableColumnResize !== false;

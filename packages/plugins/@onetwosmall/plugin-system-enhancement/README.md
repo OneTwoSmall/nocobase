@@ -62,6 +62,7 @@ yarn eslint --fix packages/plugins/@onetwosmall/plugin-system-enhancement/src
 - Integrate the summary row feature into native table blocks by overriding the `TableBlockModel` registration; all native table blocks (including existing saved pages) gain the feature automatically
 - Only activate the wrapper logic (summary row + cell selection stats) once a summary config is set
 - Fix the selection stats popup not interpolating `{{num}}` (i18n options are now passed through `useT`)
+- Fix the login page background image not loading for anonymous users (serve it through a dedicated public endpoint with image-type validation and safe response headers such as `X-Content-Type-Options: nosniff` and CSP `sandbox` for SVG; the client reads the attachment id from the scalar `loginBackgroundImageId` field, and the attachment itself stays private)
 - Drop v1 client support; keep an inert v1 client entry to avoid RequireJS load errors in the v1 runtime
 - Align the plugin version with the next branch (`2.2.0-beta.17`) and resync `yarn.lock`
 - Adapt tests to next APIs (explicit vitest imports, `createModelOptions` union-type narrowing)

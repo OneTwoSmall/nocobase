@@ -7,7 +7,9 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Readable } from 'node:stream';
+import type { PluginFileManagerServer } from '@nocobase/plugin-file-manager';
 import { createMockServer, type MockServer } from '@nocobase/test';
 import { isSafeRelativeUrl } from '../urlValidator';
 
@@ -25,6 +27,7 @@ async function createMockApp(): Promise<MockServer> {
       'data-source-main',
       'data-source-manager',
       'system-settings',
+      'file-manager',
       '@onetwosmall/plugin-system-enhancement',
     ],
   });
@@ -145,5 +148,50 @@ describe('systemEnhancementSettings security', () => {
       const record = await app.db.getRepository('systemEnhancementSettings').findOne({ filterByTk: 1 });
       expect(record.get('logoLinkUrl')).not.toBe(url);
     }
+  });
+
+  it('should serve the login background image anonymously with safe headers only for image attachments', async () => {
+    app = await createMockApp();
+    const fileManager = app.pm.get<PluginFileManagerServer>('file-manager');
+    const getFileStreamSpy = vi.spyOn(fileManager, 'getFileStream');
+
+    const agent = app.agent();
+
+    // 未配置背景图 -> 404
+    let response = await agent.resource('systemEnhancementSettings').getLoginBackgroundImage();
+    expect(response.status).toBe(404);
+
+    const settings = await app.db.getRepository('systemEnhancementSettings').findOne({ filterByTk: 1 });
+    const createAttachment = (filename: string, mimetype: string, extname: string) =>
+      app.db.getRepository('attachments').create({
+        values: { storageId: 1, filename, extname, mimetype, path: filename, url: filename, size: 1 },
+      });
+
+    // 非图片附件 -> 404
+    const textAttachment = await createAttachment('a.txt', 'text/plain', '.txt');
+    settings.set('loginBackgroundImageId', textAttachment.get('id'));
+    await settings.save();
+    response = await agent.resource('systemEnhancementSettings').getLoginBackgroundImage();
+    expect(response.status).toBe(404);
+    expect(getFileStreamSpy).not.toHaveBeenCalled();
+
+    // 图片附件 -> 200 + nosniff
+    getFileStreamSpy.mockResolvedValue({ stream: Readable.from(['fake-image']), contentType: 'image/png' });
+    const imageAttachment = await createAttachment('bg.png', 'image/png', '.png');
+    settings.set('loginBackgroundImageId', imageAttachment.get('id'));
+    await settings.save();
+    response = await agent.resource('systemEnhancementSettings').getLoginBackgroundImage();
+    expect(response.status).toBe(200);
+    expect(response.headers['content-type']).toContain('image/png');
+    expect(response.headers['x-content-type-options']).toBe('nosniff');
+
+    // SVG 附件 -> 200 + CSP sandbox 防脚本执行
+    getFileStreamSpy.mockResolvedValue({ stream: Readable.from(['<svg></svg>']), contentType: 'image/svg+xml' });
+    const svgAttachment = await createAttachment('bg.svg', 'image/svg+xml', '.svg');
+    settings.set('loginBackgroundImageId', svgAttachment.get('id'));
+    await settings.save();
+    response = await agent.resource('systemEnhancementSettings').getLoginBackgroundImage();
+    expect(response.status).toBe(200);
+    expect(response.headers['content-security-policy']).toBe('sandbox');
   });
 });

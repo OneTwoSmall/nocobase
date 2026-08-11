@@ -62,6 +62,7 @@ yarn eslint --fix packages/plugins/@onetwosmall/plugin-system-enhancement/src
 - 汇总行功能集成到原生表格区块：通过覆盖注册 `TableBlockModel`，所有原生表格区块（含存量页面）自动获得该功能
 - 仅在配置了汇总行后启用包裹逻辑（汇总行渲染 + 圈选统计）
 - 修复圈选统计浮层 `{{num}}` 未插值的问题（`useT` 现会透传 i18n options）
+- 修复匿名用户无法加载登录页背景图片的问题（通过专用公开接口输出，校验图片类型并设置安全响应头：`X-Content-Type-Options: nosniff`，SVG 额外加 CSP `sandbox`；客户端从标量字段 `loginBackgroundImageId` 读取附件 id，附件本身保持私有）
 - 放弃 v1 客户端支持，保留空 client 入口以避免 v1 运行时 RequireJS 加载报错
 - 插件版本与 next 分支对齐（`2.2.0-beta.17`），并重新同步 `yarn.lock`
 - 测试适配 next API（vitest 显式导入、`createModelOptions` 联合类型窄化）
