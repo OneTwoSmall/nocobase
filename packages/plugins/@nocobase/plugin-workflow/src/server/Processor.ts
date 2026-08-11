@@ -19,6 +19,8 @@ import { IJob, InstructionResult, Runner } from './instructions';
 import type { ExecutionModel, FlowNodeModel, JobModel } from './types';
 import { isWorkflowTimeoutError, WorkflowTimeoutError } from './timeout-errors';
 
+const JOB_SAVE_BATCH_SIZE = 100;
+
 export type ProcessorRunOptions = {
   rerun?: true;
   signal?: AbortSignal;
@@ -101,6 +103,7 @@ export default class Processor {
   abortController = new AbortController();
   timeoutGuard: NodeJS.Timeout | null = null;
   private runningRegistered = false;
+  private unregisterRunningExecution?: () => void;
   private abortReason: string | null = null;
   private aborted = false;
 
@@ -326,7 +329,7 @@ export default class Processor {
     }
   }
 
-  public resolveRerun(options: ProcessorRerunOptions = {}) {
+  private resolveRerun(options: ProcessorRerunOptions = {}) {
     const node = this.getRerunNode(options.nodeId);
     const targetJob = this.jobsMapByNodeKey[node.key];
 
@@ -551,45 +554,52 @@ export default class Processor {
 
     if (this.jobsToSave.size) {
       const newJobs = [];
+      const JobCollection = this.options.plugin.db.getCollection('jobs');
+      const JobsModel = this.options.plugin.db.getModel('jobs');
       for (const job of this.jobsToSave.values()) {
         if (job.isNewRecord) {
           newJobs.push(job);
         } else {
-          const JobCollection = this.options.plugin.db.getCollection('jobs');
-          const changes = [];
+          const changes: [string, unknown][] = [];
           if (job.changed('status')) {
-            changes.push([`status`, job.status]);
-            job.changed('status', false);
+            changes.push(['status', job.status]);
           }
           if (job.changed('meta')) {
-            changes.push([`meta`, JSON.stringify(job.meta ?? null)]);
-            job.changed('meta', false);
+            changes.push(['meta', JSON.stringify(job.meta ?? null)]);
           }
           if (job.changed('result')) {
-            changes.push([`result`, JSON.stringify(job.result ?? null)]);
-            job.changed('result', false);
+            changes.push(['result', JSON.stringify(job.result ?? null)]);
+          }
+          if (job.changed('startedAt')) {
+            changes.push(['startedAt', job.startedAt]);
           }
           if (changes.length) {
+            const idColumn = JobsModel.rawAttributes.id.field || 'id';
             await this.options.plugin.db.sequelize.query(
-              `UPDATE ${JobCollection.quotedTableName()} SET ${changes.map(([key]) => `${key} = ?`)} WHERE id='${
-                job.id
-              }'`,
+              `UPDATE ${JobCollection.quotedTableName()} SET ${changes.map(
+                ([field]) =>
+                  `${this.options.plugin.db.quoteIdentifier(JobsModel.rawAttributes[field].field || field)} = ?`,
+              )} WHERE ${this.options.plugin.db.quoteIdentifier(idColumn)}='${job.id}'`,
               { replacements: changes.map(([, value]) => value) },
             );
+            for (const [field] of changes) {
+              job.changed(field, false);
+            }
           }
-          // await job.save();
         }
       }
       if (newJobs.length) {
-        const JobsModel = this.options.plugin.db.getModel('jobs');
-        await JobsModel.bulkCreate(
-          newJobs.map((job) => job.toJSON()),
-          {
-            returning: false,
-          },
-        );
-        for (const job of newJobs) {
-          job.isNewRecord = false;
+        for (let offset = 0; offset < newJobs.length; offset += JOB_SAVE_BATCH_SIZE) {
+          const batch = newJobs.slice(offset, offset + JOB_SAVE_BATCH_SIZE);
+          await JobsModel.bulkCreate(
+            batch.map((job) => job.toJSON()),
+            {
+              returning: false,
+            },
+          );
+          for (const job of batch) {
+            job.isNewRecord = false;
+          }
         }
       }
       this.jobsToSave.clear();
@@ -746,6 +756,7 @@ export default class Processor {
     const { database } = <typeof ExecutionModel>this.execution.constructor;
     const model = database.getModel('jobs');
     let job: JobModel;
+    const startedAt = Object.prototype.hasOwnProperty.call(payload, 'startedAt') ? payload.startedAt : new Date();
     if (payload instanceof model) {
       job = payload;
       job.set('updatedAt', new Date());
@@ -759,6 +770,7 @@ export default class Processor {
         status: payload.status,
         result: Object.prototype.hasOwnProperty.call(payload, 'result') ? payload.result : null,
         meta: Object.prototype.hasOwnProperty.call(payload, 'meta') ? payload.meta : null,
+        startedAt,
         updatedAt: new Date(),
       });
     } else {
@@ -766,6 +778,7 @@ export default class Processor {
         {
           ...payload,
           id: this.options.plugin.snowflake.getUniqueID().toString(),
+          startedAt,
           createdAt: new Date(),
           updatedAt: new Date(),
           executionId: this.execution.id,
@@ -800,7 +813,9 @@ export default class Processor {
     this.options.plugin.timeoutManager.clear(this.execution.id);
     this.abortReason = null;
     this.aborted = false;
-    this.options.plugin.registerRunningExecution(this.execution.id, (reason) => this.abortExecution(reason));
+    this.unregisterRunningExecution = this.options.plugin.registerRunningExecution(this.execution.id, (reason) =>
+      this.abortExecution(reason),
+    );
     this.runningRegistered = true;
 
     const remaining = this.execution.expiresAt ? this.execution.expiresAt.getTime() - Date.now() : null;
@@ -826,7 +841,8 @@ export default class Processor {
     if (!this.runningRegistered) {
       return;
     }
-    this.options.plugin.unregisterRunningExecution(this.execution.id);
+    this.unregisterRunningExecution?.();
+    this.unregisterRunningExecution = undefined;
     this.runningRegistered = false;
   }
 

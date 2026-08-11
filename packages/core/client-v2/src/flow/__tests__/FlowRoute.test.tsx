@@ -9,17 +9,20 @@
 
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, Route, Router, Routes, useNavigate } from 'react-router-dom';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { FlowContextProvider, FlowEngine, FlowEngineProvider, type FlowModel } from '@nocobase/flow-engine';
 import FlowRoute from '../components/FlowRoute';
 import { RouteRepository } from '../../RouteRepository';
+import { NocoBaseDesktopRouteType } from '../../flow-compat';
 
 type MockAdminLayoutModel = FlowModel & {
   registerRoutePage: ReturnType<typeof vi.fn>;
   updateRoutePage: ReturnType<typeof vi.fn>;
   unregisterRoutePage: ReturnType<typeof vi.fn>;
 };
+
+type RouterNavigator = React.ComponentProps<typeof Router>['navigator'];
 
 const { hookState } = vi.hoisted(() => {
   return {
@@ -113,6 +116,7 @@ describe('FlowRoute', () => {
         }),
       );
     });
+    expect(engine.context.deviceType).toBe('computer');
 
     rerender(
       <FlowEngineProvider engine={engine}>
@@ -578,14 +582,14 @@ describe('FlowRoute', () => {
     expect(getRouteBySchemaUid).toHaveBeenCalledTimes(1);
   });
 
-  it('should show 404 when current route is a legacy page in v2 runtime', async () => {
+  it('should explain how to open a legacy page outside the v2 runtime', async () => {
     const originalLocation = window.location;
     const replace = vi.fn();
     Object.defineProperty(window, 'location', {
       configurable: true,
       value: {
         ...originalLocation,
-        pathname: '/v2/admin/test-page/tab/tab-1',
+        pathname: '/nocobase/v2/apps/jhb20/admin/test-page/tab/tab-1',
         search: '?from=direct',
         hash: '#dialog',
         replace,
@@ -604,9 +608,9 @@ describe('FlowRoute', () => {
       });
       engine.context.defineProperty('app', {
         value: {
-          getPublicPath: () => '/v2/',
+          getPublicPath: () => '/nocobase/v2/',
           router: {
-            getBasename: () => '/v2',
+            getBasename: () => '/nocobase/v2',
           },
         },
       });
@@ -622,15 +626,25 @@ describe('FlowRoute', () => {
 
       render(
         <FlowEngineProvider engine={engine}>
-          <MemoryRouter initialEntries={['/flow/test-page']}>
+          <MemoryRouter initialEntries={['/nocobase/v2/apps/jhb20/admin/test-page/tab/tab-1?from=direct#dialog']}>
             <Routes>
-              <Route path="/flow/:name" element={<FlowRoute />} />
+              <Route path="/nocobase/v2/apps/jhb20/admin/:name/*" element={<FlowRoute />} />
             </Routes>
           </MemoryRouter>
         </FlowEngineProvider>,
       );
 
-      expect(await screen.findByText('404')).toBeInTheDocument();
+      expect(await screen.findByText('This page is not supported in the /v2/ branch')).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          'The /v2/ branch only supports new pages. This page is a legacy page. Please open it from the original entry.',
+        ),
+      ).toBeInTheDocument();
+      expect(screen.queryByText('404')).not.toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Open from the original entry' })).toHaveAttribute(
+        'href',
+        '/nocobase/apps/jhb20/admin/test-page/tab/tab-1?from=direct#dialog',
+      );
       expect(replace).not.toHaveBeenCalled();
       expect(adminLayoutModel.registerRoutePage).not.toHaveBeenCalled();
       expect(adminLayoutModel.updateRoutePage).not.toHaveBeenCalled();
@@ -701,6 +715,113 @@ describe('FlowRoute', () => {
         value: originalLocation,
       });
     }
+  });
+
+  it('should render 404 for missing FlowModel in notFound mode without routeRepository', async () => {
+    const engine = new FlowEngine();
+    engine.context.defineProperty('app', {
+      value: {
+        getPublicPath: () => '/v2/',
+        router: {
+          getBasename: () => '/v2',
+        },
+      },
+    });
+
+    const adminLayoutModel: MockAdminLayoutModel = Object.assign(
+      engine.createModel({ uid: 'admin-layout-model', use: 'FlowModel' }),
+      {
+        registerRoutePage: vi.fn(),
+        updateRoutePage: vi.fn(),
+        unregisterRoutePage: vi.fn(),
+      },
+    );
+
+    render(
+      <FlowEngineProvider engine={engine}>
+        <MemoryRouter initialEntries={['/embed/missing-page']}>
+          <Routes>
+            <Route path="/embed/:name" element={<FlowRoute legacyPageBehavior="notFound" />} />
+          </Routes>
+        </MemoryRouter>
+      </FlowEngineProvider>,
+    );
+
+    expect(await screen.findByText('404')).toBeInTheDocument();
+    expect(adminLayoutModel.registerRoutePage).not.toHaveBeenCalled();
+  });
+
+  it('should bridge by default when routeRepository does not exist', async () => {
+    const engine = new FlowEngine();
+    engine.context.defineProperty('app', {
+      value: {
+        getPublicPath: () => '/v2/',
+        router: {
+          getBasename: () => '/v2',
+        },
+      },
+    });
+
+    const adminLayoutModel: MockAdminLayoutModel = Object.assign(
+      engine.createModel({ uid: 'admin-layout-model', use: 'FlowModel' }),
+      {
+        registerRoutePage: vi.fn(),
+        updateRoutePage: vi.fn(),
+        unregisterRoutePage: vi.fn(),
+      },
+    );
+
+    render(
+      <FlowEngineProvider engine={engine}>
+        <MemoryRouter initialEntries={['/flow/missing-page']}>
+          <Routes>
+            <Route path="/flow/:name" element={<FlowRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </FlowEngineProvider>,
+    );
+
+    await waitFor(() => {
+      expect(adminLayoutModel.registerRoutePage).toHaveBeenCalledWith('missing-page', expect.any(Object));
+    });
+    expect(screen.queryByText('404')).not.toBeInTheDocument();
+  });
+
+  it('should bridge existing FlowModel in notFound mode without routeRepository', async () => {
+    const engine = new FlowEngine();
+    engine.createModel({ uid: 'test-page', use: 'FlowModel' });
+    engine.context.defineProperty('app', {
+      value: {
+        getPublicPath: () => '/v2/',
+        router: {
+          getBasename: () => '/v2',
+        },
+      },
+    });
+
+    const adminLayoutModel: MockAdminLayoutModel = Object.assign(
+      engine.createModel({ uid: 'admin-layout-model', use: 'FlowModel' }),
+      {
+        registerRoutePage: vi.fn(),
+        updateRoutePage: vi.fn(),
+        unregisterRoutePage: vi.fn(),
+      },
+    );
+
+    render(
+      <FlowEngineProvider engine={engine}>
+        <MemoryRouter initialEntries={['/embed/test-page']}>
+          <Routes>
+            <Route path="/embed/:name" element={<FlowRoute legacyPageBehavior="notFound" />} />
+          </Routes>
+        </MemoryRouter>
+      </FlowEngineProvider>,
+    );
+
+    await waitFor(() => {
+      expect(adminLayoutModel.registerRoutePage).toHaveBeenCalledWith('test-page', expect.any(Object));
+    });
+    expect(screen.queryByText('404')).not.toBeInTheDocument();
   });
 
   it('should bridge existing FlowModel when behavior is notFound and routeRepository has no route', async () => {
@@ -882,6 +1003,548 @@ describe('FlowRoute', () => {
     render(
       <FlowEngineProvider engine={engine}>
         <MemoryRouter initialEntries={['/admin/admin-denied-page']}>
+          <Routes>
+            <Route path="/admin/:name" element={<FlowRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </FlowEngineProvider>,
+    );
+
+    expect(await screen.findByText('404')).toBeInTheDocument();
+    expect(adminLayoutModel.registerRoutePage).not.toHaveBeenCalled();
+  });
+
+  it('should render blank content when current admin route matches an accessible empty group id', async () => {
+    const engine = new FlowEngine();
+    const listAccessible = vi.fn(() => [
+      {
+        id: 371750686228480,
+        schemaUid: 'group-schema',
+        title: '789',
+        type: NocoBaseDesktopRouteType.group,
+      },
+    ]);
+    engine.context.defineProperty('routeRepository', {
+      value: {
+        refreshAccessible: hookState.refresh,
+        isAccessibleLoaded: () => true,
+        ensureAccessibleLoaded: vi.fn().mockResolvedValue([]),
+        getRouteBySchemaUid: vi.fn(() => undefined),
+        listAccessible,
+      },
+    });
+    engine.context.defineProperty('app', {
+      value: {
+        getPublicPath: () => '/v2/',
+        router: {
+          getBasename: () => '/v2',
+        },
+      },
+    });
+
+    const adminLayoutModel: MockAdminLayoutModel = Object.assign(
+      engine.createModel({ uid: 'admin-layout-model', use: 'FlowModel' }),
+      {
+        registerRoutePage: vi.fn(),
+        updateRoutePage: vi.fn(),
+        unregisterRoutePage: vi.fn(),
+      },
+    );
+
+    const { container } = render(
+      <FlowEngineProvider engine={engine}>
+        <MemoryRouter initialEntries={['/admin/371750686228480']}>
+          <Routes>
+            <Route path="/admin/:name" element={<FlowRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </FlowEngineProvider>,
+    );
+
+    await waitFor(() => {
+      expect(listAccessible).toHaveBeenCalled();
+    });
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByText('404')).not.toBeInTheDocument();
+    expect(adminLayoutModel.registerRoutePage).not.toHaveBeenCalled();
+  });
+
+  it('should navigate a current admin group route to its first accessible flow page', async () => {
+    const engine = new FlowEngine();
+    const childRoute = {
+      schemaUid: 'child-flow-page',
+      title: 'Child flow page',
+      type: NocoBaseDesktopRouteType.flowPage,
+    };
+    const groupRoute = {
+      id: 371750686228480,
+      schemaUid: 'group-schema',
+      title: 'Group with child',
+      type: NocoBaseDesktopRouteType.group,
+      children: [childRoute],
+    };
+    const getRouteBySchemaUid = vi.fn((schemaUid: string) =>
+      schemaUid === 'child-flow-page' ? childRoute : undefined,
+    );
+    const listAccessible = vi.fn(() => [groupRoute]);
+    engine.context.defineProperty('routeRepository', {
+      value: {
+        refreshAccessible: hookState.refresh,
+        isAccessibleLoaded: () => true,
+        ensureAccessibleLoaded: vi.fn().mockResolvedValue([]),
+        getRouteBySchemaUid,
+        listAccessible,
+      },
+    });
+    engine.context.defineProperty('app', {
+      value: {
+        getPublicPath: () => '/v2/',
+        router: {
+          getBasename: () => '/v2',
+        },
+      },
+    });
+
+    const adminLayoutModel: MockAdminLayoutModel = Object.assign(
+      engine.createModel({ uid: 'admin-layout-model', use: 'FlowModel' }),
+      {
+        registerRoutePage: vi.fn(),
+        updateRoutePage: vi.fn(),
+        unregisterRoutePage: vi.fn(),
+      },
+    );
+
+    render(
+      <FlowEngineProvider engine={engine}>
+        <MemoryRouter initialEntries={['/admin/371750686228480']}>
+          <Routes>
+            <Route path="/admin/:name" element={<FlowRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </FlowEngineProvider>,
+    );
+
+    await waitFor(() => {
+      expect(adminLayoutModel.registerRoutePage).toHaveBeenCalledWith('child-flow-page', expect.any(Object));
+    });
+    expect(adminLayoutModel.registerRoutePage).not.toHaveBeenCalledWith('371750686228480', expect.any(Object));
+    expect(screen.queryByText('404')).not.toBeInTheDocument();
+  });
+
+  it('should keep rendering 404 when a group id is opened with a nested admin route path', async () => {
+    const engine = new FlowEngine();
+    const childRoute = {
+      schemaUid: 'child-flow-page',
+      title: 'Child flow page',
+      type: NocoBaseDesktopRouteType.flowPage,
+    };
+    const groupRoute = {
+      id: 371750686228480,
+      schemaUid: 'group-schema',
+      title: 'Group with child',
+      type: NocoBaseDesktopRouteType.group,
+      children: [childRoute],
+    };
+    engine.context.defineProperty('routeRepository', {
+      value: {
+        refreshAccessible: hookState.refresh,
+        isAccessibleLoaded: () => true,
+        ensureAccessibleLoaded: vi.fn().mockResolvedValue([]),
+        getRouteBySchemaUid: vi.fn((schemaUid: string) => (schemaUid === 'child-flow-page' ? childRoute : undefined)),
+        listAccessible: vi.fn(() => [groupRoute]),
+      },
+    });
+    engine.context.defineProperty('app', {
+      value: {
+        getPublicPath: () => '/v2/',
+        router: {
+          getBasename: () => '/v2',
+        },
+      },
+    });
+
+    const adminLayoutModel: MockAdminLayoutModel = Object.assign(
+      engine.createModel({ uid: 'admin-layout-model', use: 'FlowModel' }),
+      {
+        registerRoutePage: vi.fn(),
+        updateRoutePage: vi.fn(),
+        unregisterRoutePage: vi.fn(),
+      },
+    );
+
+    render(
+      <FlowEngineProvider engine={engine}>
+        <MemoryRouter initialEntries={['/admin/371750686228480/view/not-exists']}>
+          <Routes>
+            <Route path="/admin/:name/view/*" element={<FlowRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </FlowEngineProvider>,
+    );
+
+    expect(await screen.findByText('404')).toBeInTheDocument();
+    expect(adminLayoutModel.registerRoutePage).not.toHaveBeenCalledWith('child-flow-page', expect.any(Object));
+    expect(adminLayoutModel.registerRoutePage).not.toHaveBeenCalledWith('371750686228480', expect.any(Object));
+  });
+
+  it('should keep rendering 404 when a group id is opened with a tab admin route path', async () => {
+    const engine = new FlowEngine();
+    const childRoute = {
+      schemaUid: 'child-flow-page',
+      title: 'Child flow page',
+      type: NocoBaseDesktopRouteType.flowPage,
+    };
+    const groupRoute = {
+      id: 371750686228480,
+      schemaUid: 'group-schema',
+      title: 'Group with child',
+      type: NocoBaseDesktopRouteType.group,
+      children: [childRoute],
+    };
+    engine.context.defineProperty('routeRepository', {
+      value: {
+        refreshAccessible: hookState.refresh,
+        isAccessibleLoaded: () => true,
+        ensureAccessibleLoaded: vi.fn().mockResolvedValue([]),
+        getRouteBySchemaUid: vi.fn((schemaUid: string) => (schemaUid === 'child-flow-page' ? childRoute : undefined)),
+        listAccessible: vi.fn(() => [groupRoute]),
+      },
+    });
+    engine.context.defineProperty('app', {
+      value: {
+        getPublicPath: () => '/v2/',
+        router: {
+          getBasename: () => '/v2',
+        },
+      },
+    });
+
+    const adminLayoutModel: MockAdminLayoutModel = Object.assign(
+      engine.createModel({ uid: 'admin-layout-model', use: 'FlowModel' }),
+      {
+        registerRoutePage: vi.fn(),
+        updateRoutePage: vi.fn(),
+        unregisterRoutePage: vi.fn(),
+      },
+    );
+
+    render(
+      <FlowEngineProvider engine={engine}>
+        <MemoryRouter initialEntries={['/admin/371750686228480/tab/not-exists']}>
+          <Routes>
+            <Route path="/admin/:name/tab/:tabUid" element={<FlowRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </FlowEngineProvider>,
+    );
+
+    expect(await screen.findByText('404')).toBeInTheDocument();
+    expect(adminLayoutModel.registerRoutePage).not.toHaveBeenCalledWith('child-flow-page', expect.any(Object));
+    expect(adminLayoutModel.registerRoutePage).not.toHaveBeenCalledWith('371750686228480', expect.any(Object));
+  });
+
+  it('should keep blank content while a group child navigation is already pending for the current path', async () => {
+    const engine = new FlowEngine();
+    const childRoute = {
+      schemaUid: 'child-flow-page',
+      title: 'Child flow page',
+      type: NocoBaseDesktopRouteType.flowPage,
+    };
+    const groupRoute = {
+      id: 371750686228480,
+      schemaUid: 'group-schema',
+      title: 'Group with child',
+      type: NocoBaseDesktopRouteType.group,
+      children: [childRoute],
+    };
+    engine.context.defineProperty('routeRepository', {
+      value: {
+        refreshAccessible: hookState.refresh,
+        isAccessibleLoaded: () => true,
+        ensureAccessibleLoaded: vi.fn().mockResolvedValue([]),
+        getRouteBySchemaUid: vi.fn((schemaUid: string) => (schemaUid === 'child-flow-page' ? childRoute : undefined)),
+        listAccessible: vi.fn(() => [groupRoute]),
+      },
+    });
+    engine.context.defineProperty('app', {
+      value: {
+        getPublicPath: () => '/v2/',
+        router: {
+          getBasename: () => '/v2',
+        },
+      },
+    });
+
+    const replace = vi.fn();
+    const navigator: RouterNavigator = {
+      createHref: (to: { pathname?: string; search?: string; hash?: string } | string) =>
+        typeof to === 'string' ? to : `${to.pathname || ''}${to.search || ''}${to.hash || ''}`,
+      go: vi.fn(),
+      push: vi.fn(),
+      replace,
+    };
+
+    const RerenderAfterReplace = () => {
+      const [rerendered, setRerendered] = React.useState(false);
+      React.useEffect(() => {
+        if (!rerendered && replace.mock.calls.length > 0) {
+          setRerendered(true);
+        }
+      }, [rerendered]);
+
+      return <FlowRoute legacyPageBehavior={rerendered ? 'bridge' : undefined} />;
+    };
+
+    render(
+      <FlowEngineProvider engine={engine}>
+        <Router location="/admin/371750686228480" navigator={navigator}>
+          <Routes>
+            <Route path="/admin/:name" element={<RerenderAfterReplace />} />
+          </Routes>
+        </Router>
+      </FlowEngineProvider>,
+    );
+
+    await waitFor(() => {
+      expect(replace).toHaveBeenCalled();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(screen.queryByText('404')).not.toBeInTheDocument();
+  });
+
+  it('should reset group navigation guard when page uid changes in the same route instance', async () => {
+    const engine = new FlowEngine();
+    const childRoute1 = {
+      schemaUid: 'child-flow-page-1',
+      title: 'Child flow page 1',
+      type: NocoBaseDesktopRouteType.flowPage,
+    };
+    const childRoute2 = {
+      schemaUid: 'child-flow-page-2',
+      title: 'Child flow page 2',
+      type: NocoBaseDesktopRouteType.flowPage,
+    };
+    const groupRoute1 = {
+      id: 371750686228480,
+      schemaUid: 'group-schema-1',
+      title: 'Group with child 1',
+      type: NocoBaseDesktopRouteType.group,
+      children: [childRoute1],
+    };
+    const groupRoute2 = {
+      id: 371750755434496,
+      schemaUid: 'group-schema-2',
+      title: 'Group with child 2',
+      type: NocoBaseDesktopRouteType.group,
+      children: [childRoute2],
+    };
+    const routeMap: Record<string, typeof childRoute1 | typeof childRoute2> = {
+      'child-flow-page-1': childRoute1,
+      'child-flow-page-2': childRoute2,
+    };
+    const getRouteBySchemaUid = vi.fn((schemaUid: string) => routeMap[schemaUid]);
+    const listAccessible = vi.fn(() => [groupRoute1, groupRoute2]);
+    engine.context.defineProperty('routeRepository', {
+      value: {
+        refreshAccessible: hookState.refresh,
+        isAccessibleLoaded: () => true,
+        ensureAccessibleLoaded: vi.fn().mockResolvedValue([]),
+        getRouteBySchemaUid,
+        listAccessible,
+      },
+    });
+    engine.context.defineProperty('app', {
+      value: {
+        getPublicPath: () => '/v2/',
+        router: {
+          getBasename: () => '/v2',
+        },
+      },
+    });
+
+    const adminLayoutModel: MockAdminLayoutModel = Object.assign(
+      engine.createModel({ uid: 'admin-layout-model', use: 'FlowModel' }),
+      {
+        registerRoutePage: vi.fn(),
+        updateRoutePage: vi.fn(),
+        unregisterRoutePage: vi.fn(),
+      },
+    );
+    let navigateTo: (path: string) => void = () => {};
+    const CaptureNavigate = () => {
+      const navigate = useNavigate();
+      React.useEffect(() => {
+        navigateTo = navigate;
+      }, [navigate]);
+      return null;
+    };
+
+    render(
+      <FlowEngineProvider engine={engine}>
+        <MemoryRouter initialEntries={['/admin/371750686228480']}>
+          <CaptureNavigate />
+          <Routes>
+            <Route path="/admin/:name" element={<FlowRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </FlowEngineProvider>,
+    );
+
+    await waitFor(() => {
+      expect(adminLayoutModel.registerRoutePage).toHaveBeenCalledWith('child-flow-page-1', expect.any(Object));
+    });
+
+    act(() => {
+      navigateTo('/admin/371750755434496');
+    });
+
+    await waitFor(() => {
+      expect(adminLayoutModel.registerRoutePage).toHaveBeenCalledWith('child-flow-page-2', expect.any(Object));
+    });
+    expect(adminLayoutModel.registerRoutePage).not.toHaveBeenCalledWith('371750755434496', expect.any(Object));
+    expect(screen.queryByText('404')).not.toBeInTheDocument();
+  });
+
+  it('should keep rendering 404 when current admin route matches no accessible schema uid or id', async () => {
+    const engine = new FlowEngine();
+    engine.context.defineProperty('routeRepository', {
+      value: {
+        refreshAccessible: hookState.refresh,
+        isAccessibleLoaded: () => true,
+        ensureAccessibleLoaded: vi.fn().mockResolvedValue([]),
+        getRouteBySchemaUid: vi.fn(() => undefined),
+        listAccessible: vi.fn(() => [
+          {
+            id: 371750686228480,
+            schemaUid: 'group-schema',
+            title: '789',
+            type: NocoBaseDesktopRouteType.group,
+          },
+        ]),
+      },
+    });
+    engine.context.defineProperty('app', {
+      value: {
+        getPublicPath: () => '/v2/',
+        router: {
+          getBasename: () => '/v2',
+        },
+      },
+    });
+
+    const adminLayoutModel: MockAdminLayoutModel = Object.assign(
+      engine.createModel({ uid: 'admin-layout-model', use: 'FlowModel' }),
+      {
+        registerRoutePage: vi.fn(),
+        updateRoutePage: vi.fn(),
+        unregisterRoutePage: vi.fn(),
+      },
+    );
+
+    render(
+      <FlowEngineProvider engine={engine}>
+        <MemoryRouter initialEntries={['/admin/not-exists-4822']}>
+          <Routes>
+            <Route path="/admin/:name" element={<FlowRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </FlowEngineProvider>,
+    );
+
+    expect(await screen.findByText('404')).toBeInTheDocument();
+    expect(adminLayoutModel.registerRoutePage).not.toHaveBeenCalled();
+  });
+
+  it('should keep rendering 404 when current admin route matches only a non-group route id', async () => {
+    const engine = new FlowEngine();
+    engine.context.defineProperty('routeRepository', {
+      value: {
+        refreshAccessible: hookState.refresh,
+        isAccessibleLoaded: () => true,
+        ensureAccessibleLoaded: vi.fn().mockResolvedValue([]),
+        getRouteBySchemaUid: vi.fn(() => undefined),
+        listAccessible: vi.fn(() => [
+          {
+            id: 10001,
+            schemaUid: 'flow-page-schema',
+            title: 'Flow page',
+            type: NocoBaseDesktopRouteType.flowPage,
+          },
+        ]),
+      },
+    });
+    engine.context.defineProperty('app', {
+      value: {
+        getPublicPath: () => '/v2/',
+        router: {
+          getBasename: () => '/v2',
+        },
+      },
+    });
+
+    const adminLayoutModel: MockAdminLayoutModel = Object.assign(
+      engine.createModel({ uid: 'admin-layout-model', use: 'FlowModel' }),
+      {
+        registerRoutePage: vi.fn(),
+        updateRoutePage: vi.fn(),
+        unregisterRoutePage: vi.fn(),
+      },
+    );
+
+    render(
+      <FlowEngineProvider engine={engine}>
+        <MemoryRouter initialEntries={['/admin/10001']}>
+          <Routes>
+            <Route path="/admin/:name" element={<FlowRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </FlowEngineProvider>,
+    );
+
+    expect(await screen.findByText('404')).toBeInTheDocument();
+    expect(adminLayoutModel.registerRoutePage).not.toHaveBeenCalled();
+  });
+
+  it('should keep rendering 404 when current admin route matches only a group schema uid', async () => {
+    const engine = new FlowEngine();
+    const groupRoute = {
+      id: 371750686228480,
+      schemaUid: 'group-schema',
+      title: '789',
+      type: NocoBaseDesktopRouteType.group,
+    };
+    engine.context.defineProperty('routeRepository', {
+      value: {
+        refreshAccessible: hookState.refresh,
+        isAccessibleLoaded: () => true,
+        ensureAccessibleLoaded: vi.fn().mockResolvedValue([]),
+        getRouteBySchemaUid: vi.fn((schemaUid: string) => (schemaUid === 'group-schema' ? groupRoute : undefined)),
+        listAccessible: vi.fn(() => [groupRoute]),
+      },
+    });
+    engine.context.defineProperty('app', {
+      value: {
+        getPublicPath: () => '/v2/',
+        router: {
+          getBasename: () => '/v2',
+        },
+      },
+    });
+
+    const adminLayoutModel: MockAdminLayoutModel = Object.assign(
+      engine.createModel({ uid: 'admin-layout-model', use: 'FlowModel' }),
+      {
+        registerRoutePage: vi.fn(),
+        updateRoutePage: vi.fn(),
+        unregisterRoutePage: vi.fn(),
+      },
+    );
+
+    render(
+      <FlowEngineProvider engine={engine}>
+        <MemoryRouter initialEntries={['/admin/group-schema']}>
           <Routes>
             <Route path="/admin/:name" element={<FlowRoute />} />
           </Routes>
@@ -1121,7 +1784,7 @@ describe('FlowRoute', () => {
     expect(engine.getModel('public-form-1')).toBeUndefined();
   });
 
-  it('should not skip accessible route loading just because layout authCheck is false', async () => {
+  it('should skip accessible route loading when layout authCheck is false', async () => {
     const engine = new FlowEngine();
     const ensureAccessibleLoaded = vi.fn().mockRejectedValue(new Error('cannot load accessible routes'));
     const getRouteBySchemaUid = vi.fn();
@@ -1190,7 +1853,7 @@ describe('FlowRoute', () => {
     await waitFor(() => {
       expect(layoutModel.registerRoutePage).toHaveBeenCalledWith('public-form-1', expect.any(Object));
     });
-    expect(ensureAccessibleLoaded).toHaveBeenCalledTimes(1);
+    expect(ensureAccessibleLoaded).not.toHaveBeenCalled();
     expect(getRouteBySchemaUid).not.toHaveBeenCalled();
   });
 
@@ -1256,7 +1919,7 @@ describe('FlowRoute', () => {
     }
   });
 
-  it('should render not found without redirecting when admin route does not exist', async () => {
+  it('should render 404 when route and FlowModel do not exist', async () => {
     const originalLocation = window.location;
     const replace = vi.fn();
     Object.defineProperty(window, 'location', {

@@ -38,6 +38,11 @@ type FormBlockModel = FlowModel & {
   getAclActionName?: () => string;
 };
 
+export type FormValuePatch = {
+  path: NamePath;
+  value: unknown;
+};
+
 export class FormValueRuntime {
   private readonly model: FormBlockModel;
   private readonly getForm: () => FormInstance;
@@ -81,6 +86,10 @@ export class FormValueRuntime {
 
     this.ruleEngine = new RuleEngine({
       getBlockModelUid: () => String(this.model?.uid),
+      getAssignRulesModelUid: () => {
+        const grid = this.model?.subModels?.grid;
+        return !Array.isArray(grid) && grid?.uid ? String(grid.uid) : undefined;
+      },
       getActionName: () => this.model?.getAclActionName?.() ?? this.model?.context?.actionName,
       getBlockContext: () => this.model?.context,
       getEngine: () => this.model?.context?.engine,
@@ -142,13 +151,75 @@ export class FormValueRuntime {
     return this.getForm().getFieldsValue(true);
   }
 
-  private toMirrorSnapshot(value: any) {
-    const raw = isObservable(value) ? toJS(value) : value;
-    return _.cloneDeepWith(raw, (item) => {
-      if (!item || typeof item !== 'object') return undefined;
-      if (Array.isArray(item) || _.isPlainObject(item)) return undefined;
-      return item;
-    });
+  getUserEditedValuePatches(): FormValuePatch[] {
+    const snapshot = this.getFormValuesSnapshot();
+    if (!snapshot || typeof snapshot !== 'object') {
+      return [];
+    }
+
+    const patches: FormValuePatch[] = [];
+    const pathKeys = Array.from(this.userEditedSet).sort(
+      (a, b) => pathKeyToNamePath(a).length - pathKeyToNamePath(b).length,
+    );
+
+    for (const pathKey of pathKeys) {
+      if (!this.isCurrentUserEditedPath(pathKey)) {
+        continue;
+      }
+
+      const namePath = pathKeyToNamePath(pathKey);
+      if (!namePath.length || !_.has(snapshot, namePath as any)) {
+        continue;
+      }
+
+      const value = _.get(snapshot, namePath as any);
+      if (typeof value === 'undefined') {
+        continue;
+      }
+
+      patches.push({
+        path: namePath,
+        value: this.omitNonUserDescendantValues(pathKey, this.toMirrorSnapshot(value)),
+      });
+    }
+
+    return patches;
+  }
+
+  getUserEditedValuesSnapshot(): Record<string, unknown> {
+    const values: Record<string, unknown> = {};
+    for (const patch of this.getUserEditedValuePatches()) {
+      _.set(values, patch.path as any, patch.value);
+    }
+    return values;
+  }
+
+  private toMirrorSnapshot<T>(value: T): T {
+    const cloneValue = (input: unknown): unknown =>
+      _.cloneDeepWith(input, (item: unknown) => {
+        if (isObservable(item)) {
+          const plainItem = toJS(item);
+          if (plainItem !== item) return cloneValue(plainItem);
+        }
+
+        // Tracking form-value array proxies hide `constructor`, while Lodash's array
+        // clone relies on it being callable.
+        if (Array.isArray(item) && typeof item.constructor !== 'function') {
+          const plainArray = new Array(item.length);
+          for (let index = 0; index < item.length; index++) {
+            if (Object.hasOwn(item, index)) {
+              plainArray[index] = cloneValue(item[index]);
+            }
+          }
+          return plainArray;
+        }
+
+        if (!item || typeof item !== 'object') return undefined;
+        if (Array.isArray(item) || _.isPlainObject(item)) return undefined;
+        return item;
+      });
+
+    return cloneValue(value) as T;
   }
 
   canApplyDefaultValuePatch(namePath: NamePath, resolved: any) {
@@ -892,11 +963,12 @@ export class FormValueRuntime {
       const changedPaths: NamePath[] = [];
 
       if (!Array.isArray(patch)) {
-        const patchEntries = Object.entries(patch || {}).filter(([pathKey, rawValue]) => {
-          if (shouldSkipByLinkageScope(pathKey)) return false;
-          const value = isObservable(rawValue) ? toJS(rawValue) : rawValue;
-          return !_.isEqual(this.getFormValueAtPath([pathKey]), value);
-        });
+        const patchEntries = Object.entries(patch || {})
+          .map(([pathKey, rawValue]) => [pathKey, this.toMirrorSnapshot(rawValue)] as const)
+          .filter(([pathKey, value]) => {
+            if (shouldSkipByLinkageScope(pathKey)) return false;
+            return !_.isEqual(this.getFormValueAtPath([pathKey]), value);
+          });
         const patchToApply = Object.fromEntries(patchEntries);
         const patchKeys = patchEntries.map(([pathKey]) => pathKey);
         if (!patchKeys.length) {
@@ -907,8 +979,7 @@ export class FormValueRuntime {
         }
         this.suppressFormCallbackDepth++;
         try {
-          for (const [pathKey, rawValue] of patchEntries) {
-            const value = isObservable(rawValue) ? toJS(rawValue) : rawValue;
+          for (const [pathKey, value] of patchEntries) {
             if (typeof form.setFieldValue === 'function') {
               form.setFieldValue(pathKey, value);
             } else if (typeof (form as any).setFields === 'function') {
@@ -969,7 +1040,7 @@ export class FormValueRuntime {
         const namePath = this.resolveNamePath(callerCtx, item.path);
         const pathKey = namePathToPathKey(namePath);
         const rawValue = item.value;
-        const value = isObservable(rawValue) ? toJS(rawValue) : rawValue;
+        const value = this.toMirrorSnapshot(rawValue);
 
         if (shouldSkipByLinkageScope(pathKey)) continue;
 
@@ -1108,17 +1179,18 @@ export class FormValueRuntime {
     if (!form) return;
     if (source === 'override' && this.findUserEditedHit(pathKey)) return;
 
+    const value = this.toMirrorSnapshot(nextValue);
     const prevValue = _.get(this.valuesMirror, namePath);
-    if (_.isEqual(prevValue, nextValue)) return;
+    if (_.isEqual(prevValue, value)) return;
 
     this.writeSeq += 1;
     const writeSeq = this.writeSeq;
 
     this.suppressFormCallbackDepth++;
     try {
-      form.setFieldValue?.(namePath, nextValue);
-      _.set(this.valuesMirror, namePath, this.toMirrorSnapshot(nextValue));
-      this.syncMountedFieldModelValue(namePath, nextValue);
+      form.setFieldValue?.(namePath, value);
+      _.set(this.valuesMirror, namePath, this.toMirrorSnapshot(value));
+      this.syncMountedFieldModelValue(namePath, value);
       this.bumpChangeTick();
     } finally {
       this.suppressFormCallbackDepth--;
@@ -1451,6 +1523,49 @@ export class FormValueRuntime {
       return key;
     }
     return null;
+  }
+
+  private findLatestWriteMeta(pathKey: string): FormValueWriteMeta | undefined {
+    let latest: FormValueWriteMeta | undefined;
+    const namePath = pathKeyToNamePath(pathKey);
+    const prefix: NamePath = [];
+
+    for (let i = 0; i < namePath.length; i++) {
+      prefix.push(namePath[i]);
+      const meta = this.lastWriteMetaByPathKey.get(namePathToPathKey(prefix as any));
+      if (!meta) {
+        continue;
+      }
+      if (!latest || meta.writeSeq >= latest.writeSeq) {
+        latest = meta;
+      }
+    }
+
+    return latest;
+  }
+
+  private isCurrentUserEditedPath(pathKey: string) {
+    const lastWrite = this.findLatestWriteMeta(pathKey);
+    return !lastWrite || lastWrite.source === 'user';
+  }
+
+  private omitNonUserDescendantValues(pathKey: string, value: unknown) {
+    if (!value || typeof value !== 'object') {
+      return value;
+    }
+
+    const namePath = pathKeyToNamePath(pathKey);
+    for (const childKey of this.lastWriteMetaByPathKey.keys()) {
+      if (!this.isDescendantPathKey(childKey, pathKey)) {
+        continue;
+      }
+      if (this.isCurrentUserEditedPath(childKey)) {
+        continue;
+      }
+      _.unset(value as Record<string, unknown>, pathKeyToNamePath(childKey).slice(namePath.length) as any);
+    }
+
+    return value;
   }
 
   private isDescendantPathKey(candidateKey: string, parentKey: string) {

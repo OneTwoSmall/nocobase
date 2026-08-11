@@ -23,6 +23,7 @@ import type { AIEmployee as AIEmployeeType } from '../../collections/ai-employee
 import {
   conversationMiddleware,
   skillToolBindingMiddleware,
+  toolCallSanitizerMiddleware,
   toolCallStatusMiddleware,
   toolInteractionMiddleware,
   workflowHistoryMiddleware,
@@ -39,6 +40,19 @@ import { LLMResult } from '@langchain/core/outputs';
 import { Context } from '@nocobase/actions';
 import { listAccessibleAIEmployees, serializeEmployeeSummary } from '../../ai/tools/sub-agents/shared';
 import { LLMStreamCached } from '../manager/llm-stream-manager';
+import { sanitizeAdditionalKwargsForToolCalls } from './tool-call-sanitizer';
+import {
+  findMessageAttachments,
+  getAttachmentSource,
+  getMessageAttachmentLookupKey,
+  shouldSkipAttachmentSourceLookup,
+} from '../attachments';
+import { EXECUTE_FRONTEND_TOOL_NAME, LOAD_FRONTEND_TOOL_NAME } from '../../common/frontend-tools';
+import {
+  listCurrentFrontendTools,
+  prepareToolsForFrontendConversation,
+  shouldAutoExecuteFrontendTool,
+} from '../frontend-tools';
 
 export interface ModelRef {
   llmService: string;
@@ -81,6 +95,7 @@ export class AIEmployee {
   employee: Model;
   aiChatConversation: AIChatConversation;
   skillSettings?: Record<string, any>;
+  userMessageCount = 0;
   private plugin: PluginAIServer;
   private db: Database;
 
@@ -174,7 +189,9 @@ export class AIEmployee {
 
   // === Chat flow ===
   private buildState(messages: AIMessage[]) {
+    const toolCallMessage = messages.findLast((message) => message.toolCalls?.length);
     return {
+      messageId: toolCallMessage?.messageId,
       lastMessageIndex: {
         lastHumanMessageIndex: messages.filter((m) => m.role === 'user').length,
         lastAIMessageIndex: messages.filter((m) => m.role === this.employee.username).length,
@@ -192,7 +209,7 @@ export class AIEmployee {
         historyMessages: [],
         tools,
         resolvedTools,
-        middleware: await this.getMiddleware({ tools, baseToolNames, model, providerName, llmService }),
+        middleware: await this.getMiddleware({ tools, baseToolNames, model, providerName, provider, llmService }),
         config: undefined,
         state: undefined,
       };
@@ -213,6 +230,7 @@ export class AIEmployee {
         baseToolNames,
         model,
         providerName,
+        provider,
         llmService,
         messageId,
         agentThread,
@@ -241,6 +259,7 @@ export class AIEmployee {
     const { provider, model, service } = await this.plugin.aiManager.getLLMService({
       ...this.model,
     });
+    this.userMessageCount = (userMessages ?? []).filter((message) => message.role === 'user').length;
     const { historyMessages, tools, resolvedTools, middleware, config, state } = await this.initSession({
       messageId,
       provider,
@@ -363,7 +382,7 @@ export class AIEmployee {
       const { threadId } = await this.getCurrentThread();
       const invokeConfig = {
         context: { ctx: this.ctx, decisions: chatContext.decisions, ...context },
-        recursionLimit: 100,
+        recursionLimit: 200,
         configurable: this.from === 'main-agent' ? { thread_id: threadId } : undefined,
         writer,
         signal,
@@ -477,7 +496,7 @@ export class AIEmployee {
           streamMode: ['updates', 'messages', 'custom'],
           configurable: this.from === 'main-agent' ? { thread_id: threadId } : undefined,
           context: { ctx: this.ctx, decisions: chatContext.decisions },
-          recursionLimit: 100,
+          recursionLimit: 200,
           ...config,
         },
         state,
@@ -512,6 +531,7 @@ export class AIEmployee {
           const values = convertAIMessage({
             aiEmployee: this,
             providerName,
+            provider,
             llmService,
             model,
             aiMessage: gathered,
@@ -886,6 +906,7 @@ export class AIEmployee {
       knowledgeBase,
       availableSkills,
       availableAIEmployees,
+      webSearch: this.webSearch,
     });
 
     const { important } = this.ctx.action?.params?.values || {};
@@ -906,16 +927,22 @@ If information is missing, clearly state it in the summary.</Important>`;
     toolCalls: {
       id: string;
       name: string;
-      args: any;
+      args: unknown;
     }[],
   ): Promise<Model<AIToolMessage>[]> {
     const nowTime = new Date();
     const toolMap = await this.getToolsMap();
+    const currentFrontendTools = toolCalls.some((toolCall) => toolCall.name === EXECUTE_FRONTEND_TOOL_NAME)
+      ? await listCurrentFrontendTools(this.ctx, this.sessionId)
+      : [];
     return await this.aiToolMessagesRepo.create({
       values: toolCalls.map((toolCall) => {
         const toolsExisted = toolMap.has(toolCall.name);
         const tools = toolMap.get(toolCall.name);
-        const auto = this.isAutoCall(tools);
+        const auto =
+          toolCall.name === EXECUTE_FRONTEND_TOOL_NAME
+            ? toolsExisted && shouldAutoExecuteFrontendTool(currentFrontendTools, toolCall.args)
+            : this.isAutoCall(tools);
         return {
           id: this.plugin.snowflake.generate(),
           sessionId: this.sessionId,
@@ -1202,9 +1229,42 @@ If information is missing, clearly state it in the summary.</Important>`;
     return presetTools ? presetTools.autoCall : isAutoCall;
   }
 
+  private async normalizeMessageAttachments(messages: AIMessageInput[]): Promise<AIMessageInput[]> {
+    const attachments = messages
+      .filter((message) => Array.isArray(message.attachments))
+      .flatMap((message) => message.attachments);
+
+    if (!attachments.length) {
+      return messages;
+    }
+
+    const attachmentsByLookup = await findMessageAttachments(this.ctx, attachments);
+    return messages.map((message) => {
+      if (!Array.isArray(message.attachments) || !message.attachments.length) {
+        return message;
+      }
+      return {
+        ...message,
+        attachments: message.attachments.flatMap((attachment) => {
+          const source = getAttachmentSource(attachment);
+          if (!source || shouldSkipAttachmentSourceLookup(source)) {
+            return [attachment];
+          }
+          const lookupKey = getMessageAttachmentLookupKey(attachment);
+          const verifiedAttachment = lookupKey ? attachmentsByLookup.get(lookupKey) : null;
+          if (!verifiedAttachment) {
+            return [];
+          }
+          return [{ ...verifiedAttachment, source }];
+        }),
+      };
+    });
+  }
+
   private async formatMessages({ messages, provider }: { messages: AIMessageInput[]; provider: LLMProvider }) {
     const formattedMessages = [];
     const workContextHandler = this.plugin.workContextHandler;
+    const normalizedMessages = await this.normalizeMessageAttachments(messages);
 
     // 截断过长的内容
     const truncate = (text: string, maxLen = 50000) => {
@@ -1212,7 +1272,7 @@ If information is missing, clearly state it in the summary.</Important>`;
       return text.slice(0, maxLen) + '\n...[truncated]';
     };
 
-    for (const msg of messages) {
+    for (const msg of normalizedMessages) {
       const attachments = msg.attachments;
       const workContext = msg.workContext;
       const userContent = msg.content;
@@ -1288,7 +1348,15 @@ If information is missing, clearly state it in the summary.</Important>`;
         role: 'assistant',
         content,
         tool_calls: msg.toolCalls,
-        additional_kwargs: msg.metadata?.additional_kwargs,
+        additional_kwargs: sanitizeAdditionalKwargsForToolCalls(msg.metadata?.additional_kwargs, msg.toolCalls, {
+          onDiscard: (info) => {
+            this.logger.warn('Discard malformed raw tool calls from AI message', {
+              phase: 'formatMessages',
+              messageId: msg.metadata?.id,
+              ...info,
+            });
+          },
+        }).additionalKwargs,
       });
     }
 
@@ -1351,9 +1419,14 @@ If information is missing, clearly state it in the summary.</Important>`;
     if (!this.areToolsEnabled()) {
       return [];
     }
+    const currentFrontendTools = await listCurrentFrontendTools(this.ctx, this.sessionId);
     const tools: ToolsEntry[] = await this.listTools({ scope: 'GENERAL' });
+    const getSkill = await this.toolsManager.getTools(SYSTEM_TOOLS.GET_SKILL, { ctx: this.ctx });
+    if (getSkill) {
+      tools.push(getSkill);
+    }
     if (this.webSearch === true) {
-      const subAgentWebSearch = await this.toolsManager.getTools(SYSTEM_TOOLS.WEB_SEARCH);
+      const subAgentWebSearch = await this.toolsManager.getTools(SYSTEM_TOOLS.WEB_SEARCH, { ctx: this.ctx });
       tools.push(subAgentWebSearch);
     }
     const generalToolsNameSet = new Set(tools.map((x) => x.definition.name));
@@ -1361,7 +1434,9 @@ If information is missing, clearly state it in the summary.</Important>`;
     const settingsTools = this.employee.skillSettings?.tools ?? [];
     const employeeTools = [...settingsTools, ...this.tools];
     if (await this.plugin.knowledgeBaseManager.isEnabledKnowledgeBase(this.employee.toJSON() as AIEmployeeType)) {
-      const knowledgeBaseRetrieveTool = await this.toolsManager.getTools(SYSTEM_TOOLS.KNOWLEDGE_BASE);
+      const knowledgeBaseRetrieveTool = await this.toolsManager.getTools(SYSTEM_TOOLS.KNOWLEDGE_BASE, {
+        ctx: this.ctx,
+      });
       if (knowledgeBaseRetrieveTool) {
         employeeTools.push({ name: SYSTEM_TOOLS.KNOWLEDGE_BASE });
       }
@@ -1376,21 +1451,29 @@ If information is missing, clearly state it in the summary.</Important>`;
       }
       tools.push(tool);
     }
-    const systemTools = listSystemTools();
+    const systemTools = [...listSystemTools(), LOAD_FRONTEND_TOOL_NAME, EXECUTE_FRONTEND_TOOL_NAME];
     if (!this.skillSettings) {
-      return tools;
+      return prepareToolsForFrontendConversation(tools, currentFrontendTools);
     } else if (!this.skillSettings.toolsVersion) {
       const toolFilter = this.skillSettings.tools ?? [];
-      return tools.filter(
-        (t) =>
-          toolFilter.length === 0 || systemTools.includes(t.definition.name) || toolFilter.includes(t.definition.name),
+      return prepareToolsForFrontendConversation(
+        tools.filter(
+          (t) =>
+            toolFilter.length === 0 ||
+            systemTools.includes(t.definition.name) ||
+            toolFilter.includes(t.definition.name),
+        ),
+        currentFrontendTools,
       );
     } else {
       const toolFilter = this.skillSettings.tools;
       if (_.isArray(toolFilter)) {
-        return tools.filter((t) => systemTools.includes(t.definition.name) || toolFilter.includes(t.definition.name));
+        return prepareToolsForFrontendConversation(
+          tools.filter((t) => systemTools.includes(t.definition.name) || toolFilter.includes(t.definition.name)),
+          currentFrontendTools,
+        );
       } else {
-        return tools;
+        return prepareToolsForFrontendConversation(tools, currentFrontendTools);
       }
     }
   }
@@ -1437,6 +1520,9 @@ If information is missing, clearly state it in the summary.</Important>`;
     }
     const baseTools = await this.getAIEmployeeTools();
     const toolMap = await this.getToolsMap();
+    for (const tool of baseTools) {
+      toolMap.set(tool.definition.name, tool);
+    }
     const availableSkills = await this.getAvailableSkills();
     const skillOwnedToolNames = new Set(availableSkills.flatMap((it) => it.tools ?? []));
     const baseToolNames = new Set(
@@ -1514,6 +1600,7 @@ If information is missing, clearly state it in the summary.</Important>`;
 
   private async getMiddleware(options: {
     providerName: string;
+    provider: LLMProvider;
     llmService?: string;
     model: string;
     tools: any[];
@@ -1521,7 +1608,7 @@ If information is missing, clearly state it in the summary.</Important>`;
     messageId?: string;
     agentThread?: AgentThread;
   }) {
-    const { providerName, llmService, model, tools, baseToolNames, messageId, agentThread } = options;
+    const { providerName, provider, llmService, model, tools, baseToolNames, messageId, agentThread } = options;
     const inWorkflow = await this.isInWorkflow();
     return [
       skillToolBindingMiddleware(this, {
@@ -1530,7 +1617,8 @@ If information is missing, clearly state it in the summary.</Important>`;
       toolInteractionMiddleware(this, tools),
       toolCallStatusMiddleware(this),
       ...(inWorkflow ? [workflowHistoryMiddleware(this, this.db)] : []),
-      conversationMiddleware(this, { providerName, llmService, model, messageId, agentThread }),
+      conversationMiddleware(this, { providerName, provider, llmService, model, messageId, agentThread }),
+      toolCallSanitizerMiddleware({ logger: this.logger }),
     ];
   }
 
@@ -1564,7 +1652,10 @@ If information is missing, clearly state it in the summary.</Important>`;
   }
 
   private listTools(filter?: ToolsFilter) {
-    return this.toolsManager.listTools(filter);
+    return this.toolsManager.listTools({
+      ...filter,
+      ctx: this.ctx,
+    });
   }
 
   private withRunMetadata(config?: any) {
