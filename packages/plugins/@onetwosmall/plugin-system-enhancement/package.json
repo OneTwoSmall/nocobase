@@ -1,13 +1,13 @@
 {
   "name": "@onetwosmall/plugin-system-enhancement",
-  "version": "2.2.0-beta.5",
+  "version": "2.2.0-beta.17",
   "main": "dist/server/index.js",
   "displayName": "System Enhancement",
   "displayName.zh-CN": "系统增强",
   "description": "System enhancement features including table enhancement and more.",
   "description.zh-CN": "系统增强功能，包括表格增强等。",
   "nocobase": {
-    "supportedVersions": ["1.x", "2.x"],
+    "supportedVersions": ["2.x"],
     "editionLevel": 0
   },
   "dependencies": {},

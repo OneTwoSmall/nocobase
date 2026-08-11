@@ -7,6 +7,7 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
+import { afterEach, describe, expect, it } from 'vitest';
 import { createMockServer, type MockServer } from '@nocobase/test';
 import { isSafeRelativeUrl } from '../urlValidator';
 

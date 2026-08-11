@@ -8,6 +8,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
+import { FlowEngine, type FlowModelContext } from '@nocobase/flow-engine';
 import { EnhancedTableBlockModel } from '../EnhancedTableBlockModel';
 
 describe('EnhancedTableBlockModel', () => {
@@ -18,15 +19,26 @@ describe('EnhancedTableBlockModel', () => {
     expect(flow?.getStep('summaryConfig')).toBeDefined();
   });
 
-  it('should be defined as a searchable content block model', () => {
+  it('should be defined as a searchable content block model', async () => {
     const meta = EnhancedTableBlockModel.meta;
     expect(meta).toBeDefined();
     expect(meta?.label).toBeDefined();
     expect(meta?.group).toBeDefined();
     expect(meta?.searchable).toBe(true);
-    expect(meta?.createModelOptions?.()).toMatchObject({
-      use: 'EnhancedTableBlockModel',
+    expect(
+      typeof meta?.createModelOptions === 'function'
+        ? await meta.createModelOptions({} as FlowModelContext)
+        : meta?.createModelOptions,
+    ).toMatchObject({
+      use: 'TableBlockModel',
     });
+  });
+
+  it('should override the native TableBlockModel registration so existing blocks resolve to the enhanced class', () => {
+    const engine = new FlowEngine();
+    engine.registerModels({ TableBlockModel: EnhancedTableBlockModel });
+    expect(engine.getModelClass('TableBlockModel')).toBe(EnhancedTableBlockModel);
+    expect(engine.getModelClass('TableBlockModel')?.name).toBe('TableBlockModel');
   });
 
   it('summaryConfig handler should persist only non-empty aggregations', async () => {

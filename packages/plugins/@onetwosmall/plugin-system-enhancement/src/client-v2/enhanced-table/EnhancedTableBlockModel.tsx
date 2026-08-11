@@ -42,6 +42,10 @@ const EnhancedTableWrapper = observer(({ model, children }: { model?: any; child
   if (!isEnhancedTableEnabled()) {
     return <>{children}</>;
   }
+  const config: SummaryConfig = model?.props?.summaryConfig || EMPTY_CONFIG;
+  if (Object.keys(config).length === 0) {
+    return <>{children}</>;
+  }
   return <EnhancedTableWrapperInner model={model}>{children}</EnhancedTableWrapperInner>;
 });
 
@@ -210,7 +214,7 @@ EnhancedTableBlockModel.define({
   searchable: true,
   searchPlaceholder: tExpr('Search'),
   createModelOptions: () => ({
-    use: 'EnhancedTableBlockModel',
+    use: 'TableBlockModel',
     subModels: {
       columns: [
         {

@@ -26,7 +26,9 @@ export class PluginSystemEnhancementClientV2 extends Plugin<any> {
   async load() {
     const self = this as any;
 
-    this.flowEngine.registerModels({ EnhancedTableBlockModel });
+    // 覆盖注册原生 TableBlockModel：所有原生表格区块（含存量页面）都使用增强子类，
+    // 通过 renderComponent 包裹渲染汇总行，并提供 enhancedTableSettings 设置流程。
+    this.flowEngine.registerModels({ TableBlockModel: EnhancedTableBlockModel });
 
     self.pluginSettingsManager.addMenuItem({
       key: NAMESPACE,
