@@ -621,6 +621,26 @@ describe('workflow > triggers > collection', () => {
   });
 
   describe('config.appends', () => {
+    it('loads trigger data by record id when appends is omitted', async () => {
+      const workflow = await WorkflowModel.create({
+        enabled: false,
+        sync: true,
+        type: 'collection',
+        config: {
+          mode: 1,
+          collection: 'posts',
+        },
+      });
+
+      const post = await PostRepo.create({ values: { title: 't1' } });
+
+      await plugin.execute(workflow, { data: post.id }, { manually: true });
+
+      const [execution] = await workflow.getExecutions();
+      expect(execution.status).toBe(EXECUTION_STATUS.RESOLVED);
+      expect(execution.context.data.title).toBe('t1');
+    });
+
     it('non-appended association could not be accessed', async () => {
       const workflow = await WorkflowModel.create({
         enabled: true,
@@ -901,6 +921,38 @@ describe('workflow > triggers > collection', () => {
       expect(e2s.length).toBe(1);
       expect(e2s[0].toJSON()).toMatchObject(data.execution);
       expect(data.execution.status).toBe(EXECUTION_STATUS.RESOLVED);
+    });
+
+    it('should not fail when manually executed data does not match condition', async () => {
+      const workflow = await WorkflowModel.create({
+        type: 'collection',
+        sync: true,
+        config: {
+          mode: 1,
+          collection: 'posts',
+          condition: {
+            id: -1,
+          },
+        },
+      });
+
+      const post = await PostRepo.create({ values: { title: 't1' } });
+
+      const {
+        status,
+        body: { data },
+      } = await agent.resource('workflows').execute({
+        filterByTk: workflow.id,
+        values: {
+          data: post.toJSON(),
+        },
+      });
+
+      expect(status).toBe(200);
+      expect(data.execution).toBeNull();
+
+      const executions = await workflow.getExecutions();
+      expect(executions.length).toBe(0);
     });
   });
 

@@ -1165,10 +1165,16 @@ describe('flowSurfaces catalog + compose contract', () => {
         triggerWorkflows: {
           type: 'array',
         },
+        afterSuccess: {
+          type: 'object',
+        },
       },
     );
     expect(tableCatalog.actions.find((item: any) => item.key === 'bulkUpdate')?.configureOptions).toMatchObject({
       assignValues: {
+        type: 'object',
+      },
+      afterSuccess: {
         type: 'object',
       },
     });
@@ -6295,6 +6301,7 @@ describe('flowSurfaces catalog + compose contract', () => {
       title: '编辑',
       type: 'link',
       icon: null,
+      iconOnly: false,
     });
 
     const gridCardViewReadback = await getSurface(rootAgent, {
@@ -6303,6 +6310,7 @@ describe('flowSurfaces catalog + compose contract', () => {
     expect(gridCardViewReadback.tree.stepParams?.buttonSettings?.general).toMatchObject({
       type: 'link',
       icon: null,
+      iconOnly: false,
     });
 
     const explicitListEditReadback = await getSurface(rootAgent, {
@@ -7576,6 +7584,12 @@ describe('flowSurfaces catalog + compose contract', () => {
               assignValues: {
                 nickname: 'inactive',
               },
+              afterSuccess: {
+                successMessage: 'Employees archived',
+                manualClose: false,
+                actionAfterSuccess: 'redirect',
+                redirectTo: '/admin/archived-employees',
+              },
             },
           },
           {
@@ -7625,6 +7639,12 @@ describe('flowSurfaces catalog + compose contract', () => {
     expect(bulkUpdateReadback.tree.use).toBe('BulkUpdateActionModel');
     expectAssignedValuesMirrors(bulkUpdateReadback.tree, {
       nickname: 'inactive',
+    });
+    expect(bulkUpdateReadback.tree.stepParams?.assignSettings?.afterSuccess).toEqual({
+      successMessage: 'Employees archived',
+      manualClose: false,
+      actionAfterSuccess: 'redirect',
+      redirectTo: '/admin/archived-employees',
     });
 
     const { actionSurface: popupSurface, popupBlock } = await readPrimaryPopupBlock(
@@ -7701,6 +7721,11 @@ describe('flowSurfaces catalog + compose contract', () => {
               assignValues: {
                 nickname: 'active',
               },
+              afterSuccess: {
+                successMessage: 'Employee activated',
+                manualClose: true,
+                actionAfterSuccess: 'stay',
+              },
             },
           },
         ],
@@ -7727,6 +7752,11 @@ describe('flowSurfaces catalog + compose contract', () => {
     expect(implicitEditSurface.tree.popup.template).toMatchObject({
       mode: 'reference',
     });
+    expect(implicitEditSurface.tree.stepParams?.buttonSettings?.general).toMatchObject({
+      type: 'link',
+      icon: null,
+      iconOnly: false,
+    });
     expect(implicitEditPopupBlock?.use).toBe('EditFormModel');
     expect(implicitEditPopupBlock?.stepParams?.resourceSettings?.init?.collectionName).toBe('users');
     expect(_.castArray(implicitEditPopupBlock?.subModels?.actions || []).map((item: any) => item?.use)).toContain(
@@ -7737,6 +7767,11 @@ describe('flowSurfaces catalog + compose contract', () => {
       await readPrimaryPopupBlock(addRecordActionsData.recordActions[3].result.uid);
     expect(implicitViewWithLayoutSurface.tree.popup.template).toMatchObject({
       mode: 'reference',
+    });
+    expect(implicitViewWithLayoutSurface.tree.stepParams?.buttonSettings?.general).toMatchObject({
+      type: 'link',
+      icon: null,
+      iconOnly: false,
     });
     expect(implicitViewWithLayoutPopupBlock?.use).toBe('DetailsBlockModel');
 
@@ -7756,6 +7791,11 @@ describe('flowSurfaces catalog + compose contract', () => {
     expect(updateRecordReadback.tree.stepParams?.buttonSettings?.general?.title).toBeUndefined();
     expectAssignedValuesMirrors(updateRecordReadback.tree, {
       nickname: 'active',
+    });
+    expect(updateRecordReadback.tree.stepParams?.assignSettings?.afterSuccess).toEqual({
+      successMessage: 'Employee activated',
+      manualClose: true,
+      actionAfterSuccess: 'stay',
     });
 
     const addFieldRawUnknownRes = await rootAgent.resource('flowSurfaces').addField({

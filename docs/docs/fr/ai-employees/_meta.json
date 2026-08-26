@@ -82,6 +82,17 @@
   },
   {
     "type": "custom-link",
+    "label": "Blocs de page",
+    "items": [
+      {
+        "type": "custom-link",
+        "label": "AI Chat box",
+        "link": "/ai-employees/block/ai-chat-box"
+      }
+    ]
+  },
+  {
+    "type": "custom-link",
     "label": "Employés AI intégrés",
     "items": [
       {
@@ -149,11 +160,6 @@
         "type": "custom-link",
         "label": "Base de données vectorielle",
         "link": "/ai-employees/knowledge-base/vector-database"
-      },
-      {
-        "type": "custom-link",
-        "label": "Stockage vectoriel",
-        "link": "/ai-employees/knowledge-base/vector-store"
       },
       {
         "type": "custom-link",
@@ -286,6 +292,11 @@
         "type": "custom-link",
         "label": "Générer des rapports d'analyse métier",
         "link": "/ai-employees/scenarios/business-report"
+      },
+      {
+        "type": "custom-link",
+        "label": "Automatisation de la recherche sur les entreprises",
+        "link": "/ai-employees/scenarios/company-background-research"
       },
       {
         "type": "custom-link",

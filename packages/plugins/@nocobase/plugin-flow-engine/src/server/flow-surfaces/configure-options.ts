@@ -448,6 +448,7 @@ const JS_BLOCK_OPTIONS: FlowSurfaceConfigureOptions = {
   title: stringOption('Title', { example: 'Runtime Banner' }),
   description: stringOption('Description', { example: 'Custom JS block' }),
   className: stringOption('className', { example: 'users-banner' }),
+  showBlockCard: booleanOption('Whether to show the outer block card', { default: true, example: true }),
   code: JS_CODE,
   version: JS_VERSION,
 };
@@ -626,6 +627,17 @@ const ACTION_CONFIRM_OPTIONS: FlowSurfaceConfigureOptions = {
 const ACTION_ASSIGN_OPTIONS: FlowSurfaceConfigureOptions = {
   assignValues: objectOption('Bulk or single-record assigned values', { example: { status: 'published' } }),
   updateMode: stringOption('Update mode', { example: 'overwrite' }),
+};
+
+const ACTION_AFTER_SUCCESS_OPTIONS: FlowSurfaceConfigureOptions = {
+  afterSuccess: objectOption('Action after a successful update', {
+    example: {
+      successMessage: 'Saved successfully',
+      manualClose: false,
+      actionAfterSuccess: 'stay',
+      redirectTo: '/admin/example',
+    },
+  }),
 };
 
 const ACTION_TRIGGER_WORKFLOWS_OPTIONS: FlowSurfaceConfigureOptions = {
@@ -820,11 +832,17 @@ function getActionConfigureOptionsByUse(use?: string): FlowSurfaceConfigureOptio
       return merged(
         ACTION_CONFIRM_OPTIONS,
         ACTION_ASSIGN_OPTIONS,
+        ACTION_AFTER_SUCCESS_OPTIONS,
         ACTION_TRIGGER_WORKFLOWS_OPTIONS,
         ACTION_LINKAGE_OPTIONS,
       );
     case 'BulkUpdateActionModel':
-      return merged(ACTION_CONFIRM_OPTIONS, ACTION_ASSIGN_OPTIONS, ACTION_LINKAGE_OPTIONS);
+      return merged(
+        ACTION_CONFIRM_OPTIONS,
+        ACTION_ASSIGN_OPTIONS,
+        ACTION_AFTER_SUCCESS_OPTIONS,
+        ACTION_LINKAGE_OPTIONS,
+      );
     case 'BulkEditActionModel':
       return merged(ACTION_EDIT_MODE_OPTIONS, ACTION_LINKAGE_OPTIONS);
     case 'DuplicateActionModel':

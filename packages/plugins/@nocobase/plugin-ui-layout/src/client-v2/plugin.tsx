@@ -22,7 +22,7 @@ function MobileSettingsRedirect() {
 }
 
 function getMobileSettingsLink(app: Application) {
-  return app.getRouteUrl?.('/mobile') || '/mobile';
+  return app.getHref('/mobile');
 }
 
 export class PluginUiLayoutClientV2 extends Plugin<Record<string, never>, Application> {
@@ -91,6 +91,7 @@ export class PluginUiLayoutClientV2 extends Plugin<Record<string, never>, Applic
         return { default: module.MobileRoutesPage };
       },
     });
+    this.pluginSettingsManager.setPluginSettingsLink('ui-layout', 'routes');
 
     registerLayoutAwareDesktopRoutesPermissionsTab(this.app, (key) => this.t(key));
 

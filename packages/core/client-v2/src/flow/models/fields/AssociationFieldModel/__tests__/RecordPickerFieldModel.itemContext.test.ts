@@ -7,7 +7,8 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import { FlowContext } from '@nocobase/flow-engine';
+import { FlowContext, FlowEngine, FlowModel } from '@nocobase/flow-engine';
+import { renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildCurrentItemTitle,
@@ -21,6 +22,7 @@ import {
 } from '../itemChain';
 import { injectRecordPickerPopupContext } from '@nocobase/client-v2';
 import {
+  RecordPickerFieldModel,
   canRecordPickerSelectMultiple,
   getRecordPickerClearedValue,
   getRecordPickerEmptyValue,
@@ -28,8 +30,12 @@ import {
   normalizeRecordPickerValue,
   shouldClearRecordPickerValueOnMultipleChange,
 } from '../RecordPickerFieldModel';
-import { getAssociationHydrationNamePath, getAssociationHydrationSetterContext } from '../RecordSelectFieldModel';
-
+import {
+  collectAssociationHydrationCandidates,
+  useAssociationValueHydration,
+  getAssociationHydrationNamePath,
+  getAssociationHydrationSetterContext,
+} from '../recordSelectShared';
 function createMockCollection() {
   return {
     name: 'users',
@@ -76,6 +82,118 @@ describe('RecordPickerFieldModel item context', () => {
     expect(normalizeRecordPickerValue(rows, fieldNames, false)).toEqual({ id: 1, name: 'A', label: 'A', value: 1 });
     expect(normalizeRecordPickerValue(undefined, fieldNames, true)).toEqual([]);
     expect(normalizeRecordPickerValue(undefined, fieldNames, false)).toBeUndefined();
+  });
+
+  it('queues ID-only picker values for association label hydration', () => {
+    const statusMap = new Map<string, 'pending' | 'done'>();
+    const fieldNames = { label: 'name', value: 'id' };
+
+    expect(
+      collectAssociationHydrationCandidates({
+        value: [{ id: 1 }, { id: 2, name: 'Already hydrated' }],
+        isMultiple: true,
+        valueKey: fieldNames.value,
+        labelKey: fieldNames.label,
+        statusMap,
+      }),
+    ).toEqual([{ item: { id: 1 }, tk: 1, tkKey: '1' }]);
+    expect(statusMap).toEqual(new Map([['1', 'pending']]));
+
+    expect(
+      collectAssociationHydrationCandidates({
+        value: { id: 1 },
+        isMultiple: false,
+        valueKey: fieldNames.value,
+        labelKey: fieldNames.label,
+        statusMap,
+      }),
+    ).toEqual([]);
+  });
+
+  it('hydrates an ID-only picker value back into the form', async () => {
+    const resource = {
+      get: vi.fn().mockResolvedValue({ id: 1, name: '北京启明教育' }),
+    };
+    const setFormValue = vi.fn();
+    const onChange = vi.fn();
+    const model = {
+      resource,
+      props: { name: 'company' },
+      context: {
+        fieldPathArray: ['company'],
+        setFormValue,
+      },
+    };
+
+    const { rerender } = renderHook(() =>
+      useAssociationValueHydration({
+        model,
+        value: { id: 1 },
+        isMultiple: false,
+        fieldNames: { label: 'name', value: 'id' },
+        onChange,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(setFormValue).toHaveBeenCalledWith(
+        ['company'],
+        { id: 1, name: '北京启明教育' },
+        { source: 'default', markExplicit: false, triggerEvent: false },
+      );
+    });
+    rerender();
+
+    expect(resource.get).toHaveBeenCalledTimes(1);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('initializes a target resource before hydrating an ID-only picker value', async () => {
+    const engine = new FlowEngine();
+    engine.registerModels({ RecordPickerFieldModel });
+
+    const formItem = engine.createModel<FlowModel>({
+      use: 'FlowModel',
+      uid: 'form-item',
+    });
+    const field = engine.createModel<RecordPickerFieldModel>({
+      use: 'RecordPickerFieldModel',
+      uid: 'company-field',
+      parentId: formItem.uid,
+    });
+    const setFormValue = vi.fn();
+    field.context.defineProperty('collectionField', {
+      value: {
+        dataSourceKey: 'main',
+        target: 'rp_na_companies',
+      },
+    });
+    field.context.defineProperty('fieldPathArray', { value: ['company'] });
+    field.context.defineProperty('setFormValue', { value: setFormValue });
+
+    await field.applyFlow('recordPickerSettings');
+    const get = vi.spyOn(field.resource, 'get').mockResolvedValue({ id: 1, name: '北京启明教育' });
+    const onChange = vi.fn();
+
+    renderHook(() =>
+      useAssociationValueHydration({
+        model: field,
+        value: { id: 1 },
+        isMultiple: false,
+        fieldNames: { label: 'name', value: 'id' },
+        onChange,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(get).toHaveBeenCalledWith(1);
+      expect(setFormValue).toHaveBeenCalledWith(
+        ['company'],
+        { id: 1, name: '北京启明教育' },
+        { source: 'default', markExplicit: false, triggerEvent: false },
+      );
+    });
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it('returns the empty popup select value for the current multiple mode', () => {
@@ -241,6 +359,52 @@ describe('RecordPickerFieldModel item context', () => {
     expect(opts.serverOnlyWhenContextParams).toBe(true);
     expect(associationOpts.cache).toBe(false);
     expect(associationOpts.serverOnlyWhenContextParams).toBe(true);
+  });
+
+  it('builds whole-association descriptors for current and recursive parent item values', async () => {
+    const people = {
+      name: 'people',
+      dataSourceKey: 'main',
+      filterTargetKey: 'id',
+      getFields: () => [],
+      getField: () => undefined,
+    } as any;
+    const owner = {
+      name: 'owner',
+      target: 'people',
+      targetCollection: people,
+      isAssociationField: () => true,
+    } as any;
+    const collection = {
+      name: 'tasks',
+      dataSourceKey: 'main',
+      getFields: () => [owner],
+      getField: (name: string) => (name === 'owner' ? owner : undefined),
+    } as any;
+    const options = createAssociationItemChainContextPropertyOptions({
+      t: (value) => value,
+      title: 'Current item',
+      collectionAccessor: () => collection,
+      propertiesAccessor: (ctx) => ctx.item.value,
+      resolverPropertiesAccessor: () => ({ owner: { id: 7 } }),
+      parentCollectionAccessor: () => collection,
+      parentAccessors: {
+        parentPropertiesAccessor: () => ({ owner: { id: 8 } }),
+        parentItemMetaAccessor: () => undefined,
+        parentItemResolverAccessor: () => undefined,
+      },
+    });
+    const meta = await options.meta();
+    const params = await meta.buildVariablesParams({
+      item: { value: { owner: { id: 7 } }, parentItem: { value: { owner: { id: 8 } } } },
+    });
+
+    expect(params).toEqual({
+      parentItem: { value: { owner: { collection: 'people', dataSourceKey: 'main', filterByTk: 8 } } },
+      value: { owner: { collection: 'people', dataSourceKey: 'main', filterByTk: 7 } },
+    });
+    expect(options.resolveOnServer('value.owner.name')).toBe(true);
+    expect(options.resolveOnServer('parentItem.value.owner.name')).toBe(true);
   });
 
   it('disables current item attributes for select-record popup item context', async () => {

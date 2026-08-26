@@ -8,6 +8,8 @@
  */
 
 import {
+  ACLContext,
+  APIClient,
   BaseLayoutModel,
   ChildPageModel,
   KeepAlive,
@@ -19,9 +21,11 @@ import {
   useLayoutRoutePage,
 } from '@nocobase/client-v2';
 import { NocoBaseDesktopRouteType, type NocoBaseDesktopRoute } from '@nocobase/client-v2/flow-compat';
-import { App as AntdApp, Card, ConfigProvider, theme as antdTheme, type ThemeConfig } from 'antd';
+import { App as AntdApp, Card, ConfigProvider, Tabs, theme as antdTheme, type ThemeConfig } from 'antd';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import axios, { type AxiosInstance } from 'axios';
+import MockAdapter from 'axios-mock-adapter';
 import {
   createViewScopedEngine,
   FlowEngine,
@@ -114,11 +118,26 @@ describe('plugin-ui-layout mobile models', () => {
     window.localStorage.removeItem(FLOW_SETTINGS_PREFERENCE_STORAGE_KEY);
   });
 
+  function createACLContextValue(allowConfigUI = true) {
+    return {
+      loading: false,
+      data: {
+        data: {
+          snippets: allowConfigUI ? ['ui.*'] : [],
+        },
+        meta: {},
+      },
+      refresh: vi.fn(async () => {}),
+    };
+  }
+
   function renderMobileLayoutWithRouteRepository(
     routeRepository: MobileRouteRepositoryForTest,
     options: {
+      allowConfigUI?: boolean;
       beforeRender?: (model: MobileLayoutModel) => void;
       api?: {
+        axios?: AxiosInstance;
         request: (options: Record<string, unknown>) => Promise<{ data?: { data?: NocoBaseDesktopRoute[] } }>;
       };
       initialEntries?: string[];
@@ -172,6 +191,7 @@ describe('plugin-ui-layout mobile models', () => {
       use: 'MobileLayoutModel',
       props: {
         layout: {
+          layoutModelClass: 'MobileLayoutModel',
           routeName: 'mobile',
           routePath: '/v/mobile',
           uid: 'mobile-layout-model-render-test',
@@ -185,40 +205,46 @@ describe('plugin-ui-layout mobile models', () => {
         FlowEngineProvider,
         { engine },
         React.createElement(
-          ConfigProvider,
+          ACLContext.Provider,
           {
-            theme: options.theme,
+            value: createACLContextValue(options.allowConfigUI !== false),
           },
           React.createElement(
-            AntdApp,
-            null,
+            ConfigProvider,
+            {
+              theme: options.theme,
+            },
             React.createElement(
-              MemoryRouter,
-              {
-                initialEntries: options.initialEntries || [
-                  options.memoryRouterBasename ? `${options.memoryRouterBasename}/mobile` : '/v/mobile',
-                ],
-                basename: options.memoryRouterBasename,
-              },
+              AntdApp,
+              null,
               React.createElement(
-                Routes,
-                null,
-                options.outletElement
-                  ? React.createElement(
-                      Route,
-                      {
-                        path: routerRoutePath,
+                MemoryRouter,
+                {
+                  initialEntries: options.initialEntries || [
+                    options.memoryRouterBasename ? `${options.memoryRouterBasename}/mobile` : '/v/mobile',
+                  ],
+                  basename: options.memoryRouterBasename,
+                },
+                React.createElement(
+                  Routes,
+                  null,
+                  options.outletElement
+                    ? React.createElement(
+                        Route,
+                        {
+                          path: routerRoutePath,
+                          element: model.render(),
+                        },
+                        React.createElement(Route, {
+                          path: ':name',
+                          element: options.outletElement,
+                        }),
+                      )
+                    : React.createElement(Route, {
+                        path: `${routerRoutePath}/*`,
                         element: model.render(),
-                      },
-                      React.createElement(Route, {
-                        path: ':name',
-                        element: options.outletElement,
                       }),
-                    )
-                  : React.createElement(Route, {
-                      path: `${routerRoutePath}/*`,
-                      element: model.render(),
-                    }),
+                ),
               ),
             ),
           ),
@@ -379,8 +405,12 @@ describe('plugin-ui-layout mobile models', () => {
       uid: 'mobile-route-parent',
       use: 'RouteModel',
     });
-    routeModel.context.defineProperty('isMobileLayout', {
-      value: true,
+    routeModel.context.defineProperty('layout', {
+      value: {
+        layoutModelClass: 'MobileLayoutModel',
+        rootPageModelClass: 'MobileRootPageModel',
+        childPageModelClass: 'MobileChildPageModel',
+      },
     });
 
     const rootPage = engine.createModel({
@@ -439,7 +469,64 @@ describe('plugin-ui-layout mobile models', () => {
     expect(childPage).not.toBeInstanceOf(MobileChildPageModel);
   });
 
-  it('should resolve persisted child pages to mobile page models from mobile view input args', () => {
+  it('should keep admin layout responsive pages on standard page models', () => {
+    registerMobilePageModelResolution();
+
+    const engine = new FlowEngine();
+    engine.registerModels({
+      RootPageModel,
+      ChildPageModel,
+      MobileRootPageModel,
+      MobileChildPageModel,
+      RouteModel,
+    });
+    const routeModel = engine.createModel<RouteModel>({
+      uid: 'admin-responsive-route-parent',
+      use: 'RouteModel',
+    });
+    routeModel.context.defineProperty('isMobileLayout', {
+      value: true,
+    });
+    routeModel.context.defineProperty('layout', {
+      value: {
+        layoutModelClass: 'AdminLayoutModel',
+        rootPageModelClass: 'RootPageModel',
+        childPageModelClass: 'ChildPageModel',
+      },
+    });
+    routeModel.context.defineProperty('layoutContext', {
+      value: {
+        isMobileLayout: true,
+        layout: {
+          layoutModelClass: 'AdminLayoutModel',
+          rootPageModelClass: 'RootPageModel',
+          childPageModelClass: 'ChildPageModel',
+        },
+      },
+    });
+
+    const rootPage = engine.createModel({
+      uid: 'admin-responsive-root-page',
+      parentId: routeModel.uid,
+      subKey: 'page',
+      subType: 'object',
+      use: 'RootPageModel',
+    });
+    const childPage = engine.createModel({
+      uid: 'admin-responsive-child-page',
+      parentId: routeModel.uid,
+      subKey: 'page',
+      subType: 'object',
+      use: 'ChildPageModel',
+    });
+
+    expect(rootPage).toBeInstanceOf(RootPageModel);
+    expect(rootPage).not.toBeInstanceOf(MobileRootPageModel);
+    expect(childPage).toBeInstanceOf(ChildPageModel);
+    expect(childPage).not.toBeInstanceOf(MobileChildPageModel);
+  });
+
+  it('should keep persisted child pages unchanged from mobile view input args without mobile page model class', () => {
     registerMobilePageModelResolution();
 
     const engine = new FlowEngine();
@@ -467,7 +554,8 @@ describe('plugin-ui-layout mobile models', () => {
       use: 'ChildPageModel',
     });
 
-    expect(childPage.constructor).toBe(MobileChildPageModel);
+    expect(childPage).toBeInstanceOf(ChildPageModel);
+    expect(childPage).not.toBeInstanceOf(MobileChildPageModel);
   });
 
   it('should resolve persisted child pages from mobile page model class input args', () => {
@@ -529,6 +617,84 @@ describe('plugin-ui-layout mobile models', () => {
     });
 
     expect(childPage.constructor).toBe(MobileChildPageModel);
+  });
+
+  it('should keep custom child page model classes inside mobile layouts', () => {
+    registerMobilePageModelResolution();
+
+    class CustomChildPageModel extends ChildPageModel {}
+
+    const engine = new FlowEngine();
+    engine.registerModels({
+      ChildPageModel,
+      MobileChildPageModel,
+      CustomChildPageModel,
+    });
+    const actionModel = engine.createModel({
+      uid: 'mobile-layout-custom-action-parent',
+      use: 'FlowModel',
+    });
+    actionModel.context.defineProperty('layout', {
+      value: {
+        layoutModelClass: 'MobileLayoutModel',
+        childPageModelClass: 'MobileChildPageModel',
+      },
+    });
+
+    const childPage = engine.createModel({
+      uid: 'mobile-layout-custom-child-page',
+      parentId: actionModel.uid,
+      subKey: 'page',
+      subType: 'object',
+      use: 'CustomChildPageModel',
+    });
+
+    expect(childPage).toBeInstanceOf(CustomChildPageModel);
+    expect(childPage).not.toBeInstanceOf(MobileChildPageModel);
+  });
+
+  it('should preserve the original page model resolveUse static this binding', () => {
+    const patchSymbol = Symbol.for('nocobase.plugin-ui-layout.mobilePageResolutionPatched');
+    const ChildPageModelClass = ChildPageModel as typeof ChildPageModel & {
+      [key: symbol]: boolean | undefined;
+    };
+    const originalPatched = ChildPageModelClass[patchSymbol];
+    const originalResolveUse = ChildPageModelClass.resolveUse;
+    let resolvedThis: unknown;
+
+    try {
+      ChildPageModelClass[patchSymbol] = false;
+      ChildPageModelClass.resolveUse = function resolveUseWithStaticThis() {
+        resolvedThis = this;
+      };
+      registerMobilePageModelResolution();
+
+      const engine = new FlowEngine();
+      ChildPageModelClass.resolveUse?.call(
+        ChildPageModel,
+        {
+          uid: 'mobile-layout-resolve-use-this-binding',
+          use: 'CustomChildPageModel',
+        },
+        engine,
+      );
+
+      ChildPageModelClass.resolveUse?.call(
+        ChildPageModel,
+        {
+          uid: 'mobile-layout-resolve-base-this-binding',
+          subKey: 'page',
+          subType: 'object',
+          use: 'ChildPageModel',
+        },
+        engine,
+      );
+
+      expect(resolvedThis).toBe(ChildPageModel);
+    } finally {
+      ChildPageModelClass.resolveUse = originalResolveUse;
+      ChildPageModelClass[patchSymbol] = originalPatched;
+    }
   });
 
   it('should resolve persisted child pages from a mobile parent in the view engine stack', () => {
@@ -1083,18 +1249,22 @@ describe('plugin-ui-layout mobile models', () => {
         FlowEngineProvider,
         { engine },
         React.createElement(
-          AntdApp,
-          null,
+          ACLContext.Provider,
+          { value: createACLContextValue() },
           React.createElement(
-            MemoryRouter,
-            { initialEntries: ['/v/mobile'] },
+            AntdApp,
+            null,
             React.createElement(
-              Routes,
-              null,
-              React.createElement(Route, {
-                path: '/v/mobile/*',
-                element: model.render(),
-              }),
+              MemoryRouter,
+              { initialEntries: ['/v/mobile'] },
+              React.createElement(
+                Routes,
+                null,
+                React.createElement(Route, {
+                  path: '/v/mobile/*',
+                  element: model.render(),
+                }),
+              ),
             ),
           ),
         ),
@@ -1266,18 +1436,22 @@ describe('plugin-ui-layout mobile models', () => {
         FlowEngineProvider,
         { engine },
         React.createElement(
-          AntdApp,
-          null,
+          ACLContext.Provider,
+          { value: createACLContextValue() },
           React.createElement(
-            MemoryRouter,
-            { initialEntries: ['/v/mobile'] },
+            AntdApp,
+            null,
             React.createElement(
-              Routes,
-              null,
-              React.createElement(Route, {
-                path: '/v/mobile/*',
-                element: model.render(),
-              }),
+              MemoryRouter,
+              { initialEntries: ['/v/mobile'] },
+              React.createElement(
+                Routes,
+                null,
+                React.createElement(Route, {
+                  path: '/v/mobile/*',
+                  element: model.render(),
+                }),
+              ),
             ),
           ),
         ),
@@ -1428,6 +1602,243 @@ describe('plugin-ui-layout mobile models', () => {
     unmount();
 
     expect(deactivateLayout).toHaveBeenCalledTimes(1);
+  });
+
+  it('should scope desktop route upserts while the standard mobile layout is mounted', async () => {
+    const axiosInstance = axios.create();
+    const mock = new MockAdapter(axiosInstance, { onNoMatch: 'throwException' });
+    let requestParams: unknown;
+    mock.onPost(/desktopRoutes:updateOrCreate/).reply((config) => {
+      requestParams = config.params;
+      return [200, {}];
+    });
+    const api = {
+      axios: axiosInstance,
+      request: vi.fn(async () => ({ data: { data: [] } })),
+    };
+    const routeRepository: MobileRouteRepositoryForTest = {
+      listAccessible: () => [],
+      setRoutes: vi.fn(),
+      activateLayout: vi.fn(() => vi.fn()),
+    };
+
+    const { unmount } = renderMobileLayoutWithRouteRepository(routeRepository, { api });
+
+    await axiosInstance.post(
+      'desktopRoutes:updateOrCreate',
+      {},
+      {
+        params: {
+          filterKeys: ['schemaUid'],
+        },
+      },
+    );
+    expect(requestParams).toEqual({
+      filterKeys: ['schemaUid'],
+      layout: 'mobile-layout-model-render-test',
+    });
+
+    await axiosInstance.post(
+      'desktopRoutes:updateOrCreate',
+      {},
+      {
+        params: {
+          filterKeys: ['schemaUid'],
+          layout: 'explicit-layout',
+        },
+      },
+    );
+    expect(requestParams).toEqual({
+      filterKeys: ['schemaUid'],
+      layout: 'explicit-layout',
+    });
+
+    await axiosInstance.post(
+      'desktopRoutes:updateOrCreate',
+      {},
+      {
+        params: {
+          filterKeys: ['schemaUid'],
+          portal: 'explicit-portal',
+        },
+      },
+    );
+    expect(requestParams).toEqual({
+      filterKeys: ['schemaUid'],
+      portal: 'explicit-portal',
+    });
+
+    await axiosInstance.post(
+      'desktopRoutes:updateOrCreate?portal=query-portal',
+      {},
+      {
+        params: {
+          filterKeys: ['schemaUid'],
+        },
+      },
+    );
+    expect(requestParams).toEqual({
+      filterKeys: ['schemaUid'],
+    });
+
+    await axiosInstance.post(
+      'desktopRoutes:updateOrCreate?layout[]=query-layout',
+      {},
+      {
+        params: {
+          filterKeys: ['schemaUid'],
+        },
+      },
+    );
+    expect(requestParams).toEqual({
+      filterKeys: ['schemaUid'],
+    });
+
+    await axiosInstance.post(
+      'desktopRoutes:updateOrCreate?portal[]=query-portal',
+      {},
+      {
+        params: {
+          filterKeys: ['schemaUid'],
+        },
+      },
+    );
+    expect(requestParams).toEqual({
+      filterKeys: ['schemaUid'],
+    });
+
+    unmount();
+    await axiosInstance.post(
+      'desktopRoutes:updateOrCreate',
+      {},
+      {
+        params: {
+          filterKeys: ['schemaUid'],
+        },
+      },
+    );
+    expect(requestParams).toEqual({
+      filterKeys: ['schemaUid'],
+    });
+    mock.restore();
+  });
+
+  it('should serialize URLSearchParams while scoping standard mobile route upserts', async () => {
+    const apiClient = new APIClient({ baseURL: 'https://example.test/api/' });
+    const mock = new MockAdapter(apiClient.axios, { onNoMatch: 'throwException' });
+    const requestUrls: string[] = [];
+    mock.onPost('desktopRoutes:updateOrCreate').reply((config) => {
+      const paramsSerializer = config.paramsSerializer;
+      const serializeParams = typeof paramsSerializer === 'function' ? paramsSerializer : paramsSerializer?.serialize;
+      if (!serializeParams) {
+        throw new Error('Expected the APIClient params serializer to be configured.');
+      }
+
+      const requestUrl = new URL(config.url || '', config.baseURL);
+      const serializedParams = serializeParams(config.params);
+      if (serializedParams) {
+        requestUrl.search = requestUrl.search ? `${requestUrl.search.slice(1)}&${serializedParams}` : serializedParams;
+      }
+      requestUrls.push(requestUrl.toString());
+      return [200, {}];
+    });
+    const api = {
+      axios: apiClient.axios,
+      request: vi.fn(async () => ({ data: { data: [] } })),
+    };
+    const routeRepository: MobileRouteRepositoryForTest = {
+      listAccessible: () => [],
+      setRoutes: vi.fn(),
+      activateLayout: vi.fn(() => vi.fn()),
+    };
+
+    const { unmount } = renderMobileLayoutWithRouteRepository(routeRepository, { api });
+    const params = new URLSearchParams();
+    params.append('filterKeys[]', 'schemaUid');
+    params.append('filterKeys[]', 'parentId');
+
+    await apiClient.axios.post('desktopRoutes:updateOrCreate', {}, { params });
+
+    let requestUrl = new URL(requestUrls[requestUrls.length - 1]);
+    expect(requestUrl.searchParams.getAll('filterKeys[]')).toEqual(['schemaUid', 'parentId']);
+    expect(requestUrl.searchParams.get('layout')).toBe('mobile-layout-model-render-test');
+    expect(params.has('layout')).toBe(false);
+
+    const explicitLayoutParams = new URLSearchParams({ layout: 'explicit-layout' });
+    await apiClient.axios.post('desktopRoutes:updateOrCreate', {}, { params: explicitLayoutParams });
+    requestUrl = new URL(requestUrls[requestUrls.length - 1]);
+    expect(requestUrl.searchParams.get('layout')).toBe('explicit-layout');
+
+    const explicitPortalParams = new URLSearchParams({ portal: 'explicit-portal' });
+    await apiClient.axios.post('desktopRoutes:updateOrCreate', {}, { params: explicitPortalParams });
+    requestUrl = new URL(requestUrls[requestUrls.length - 1]);
+    expect(requestUrl.searchParams.get('portal')).toBe('explicit-portal');
+    expect(requestUrl.searchParams.has('layout')).toBe(false);
+
+    const explicitArrayLayoutParams = new URLSearchParams();
+    explicitArrayLayoutParams.append('layout[]', 'explicit-array-layout');
+    await apiClient.axios.post('desktopRoutes:updateOrCreate', {}, { params: explicitArrayLayoutParams });
+    requestUrl = new URL(requestUrls[requestUrls.length - 1]);
+    expect(requestUrl.searchParams.getAll('layout[]')).toEqual(['explicit-array-layout']);
+    expect(requestUrl.searchParams.has('layout')).toBe(false);
+    expect(explicitArrayLayoutParams.getAll('layout[]')).toEqual(['explicit-array-layout']);
+
+    const explicitArrayPortalParams = new URLSearchParams();
+    explicitArrayPortalParams.append('portal[]', 'explicit-array-portal');
+    await apiClient.axios.post('desktopRoutes:updateOrCreate', {}, { params: explicitArrayPortalParams });
+    requestUrl = new URL(requestUrls[requestUrls.length - 1]);
+    expect(requestUrl.searchParams.getAll('portal[]')).toEqual(['explicit-array-portal']);
+    expect(requestUrl.searchParams.has('layout')).toBe(false);
+    expect(explicitArrayPortalParams.getAll('portal[]')).toEqual(['explicit-array-portal']);
+    unmount();
+    mock.restore();
+  });
+
+  it('should not scope desktop route upserts for a mobile portal layout model', async () => {
+    const axiosInstance = axios.create();
+    const mock = new MockAdapter(axiosInstance, { onNoMatch: 'throwException' });
+    let requestParams: unknown;
+    mock.onPost('desktopRoutes:updateOrCreate').reply((config) => {
+      requestParams = config.params;
+      return [200, {}];
+    });
+    const api = {
+      axios: axiosInstance,
+      request: vi.fn(async () => ({ data: { data: [] } })),
+    };
+    const routeRepository: MobileRouteRepositoryForTest = {
+      listAccessible: () => [],
+      setRoutes: vi.fn(),
+      activateLayout: vi.fn(() => vi.fn()),
+    };
+
+    const { unmount } = renderMobileLayoutWithRouteRepository(routeRepository, {
+      api,
+      beforeRender: (model) => {
+        model.setProps({
+          ...model.props,
+          layout: {
+            ...model.props.layout,
+            layoutModelClass: 'MultiPortalMobileLayoutModel',
+          },
+        });
+      },
+    });
+
+    await axiosInstance.post(
+      'desktopRoutes:updateOrCreate',
+      {},
+      {
+        params: {
+          filterKeys: ['schemaUid'],
+        },
+      },
+    );
+    expect(requestParams).toEqual({
+      filterKeys: ['schemaUid'],
+    });
+    unmount();
+    mock.restore();
   });
 
   it('should load mobile routes once when a child route also ensures accessible routes', async () => {
@@ -2454,6 +2865,44 @@ describe('plugin-ui-layout mobile models', () => {
     }
   });
 
+  it.each([
+    { title: 'without a stored preference', storedPreference: undefined },
+    { title: 'with an enabled stored preference', storedPreference: '1' },
+  ])('should hide the UI editor when the role cannot configure the interface $title', async ({ storedPreference }) => {
+    const restoreBreakpoint = mockDesktopBreakpoint();
+    const routeRepository: MobileRouteRepositoryForTest = {
+      listAccessible: () => [],
+      ensureAccessibleLoaded: vi.fn(async () => []),
+    };
+
+    try {
+      if (storedPreference) {
+        window.localStorage.setItem(FLOW_SETTINGS_PREFERENCE_STORAGE_KEY, storedPreference);
+      }
+      const { engine } = renderMobileLayoutWithRouteRepository(routeRepository, {
+        allowConfigUI: false,
+        beforeRender: (model) => {
+          // Start enabled so the assertion below proves the permission-sync effect actively disables Flow Settings.
+          model.flowEngine.flowSettings.enabled = true;
+        },
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText('No mobile pages yet')).toBeInTheDocument();
+      });
+      expect(screen.queryByTestId('ui-editor-button')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Add mobile tab' })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Pad preview' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Mobile preview' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'QR code' })).toBeInTheDocument();
+      await waitFor(() => {
+        expect(engine.context.flowSettingsEnabled).toBe(false);
+      });
+    } finally {
+      restoreBreakpoint();
+    }
+  });
+
   it('should keep the UI editor disabled for an empty mobile menu when the preference was disabled', async () => {
     const restoreBreakpoint = mockDesktopBreakpoint();
     window.localStorage.setItem(FLOW_SETTINGS_PREFERENCE_STORAGE_KEY, '0');
@@ -3334,11 +3783,14 @@ describe('plugin-ui-layout mobile models', () => {
 
     expect(tabbarRule).toMatch(/display:\s*flex/);
     expect(tabbarRule).toMatch(/min-height:\s*48px/);
+    expect(tabbarRule).toMatch(/overflow-x:\s*auto/);
+    expect(tabbarRule).toMatch(/scrollbar-width:\s*thin/);
     expect(tabbarRule).not.toMatch(/grid-template-columns/);
-    expect(tabbarChildRule).toMatch(/flex:\s*1 1 0%/);
-    expect(tabbarChildRule).toMatch(/min-width:\s*0/);
-    expect(itemShellRule).toMatch(/flex:\s*1 1 0%/);
-    expect(itemShellRule).toMatch(/width:\s*100%/);
+    expect(tabbarChildRule).toMatch(/flex:\s*1 0 64px/);
+    expect(tabbarChildRule).toMatch(/min-width:\s*64px/);
+    expect(itemShellRule).toMatch(/flex:\s*1 0 64px/);
+    expect(itemShellRule).toMatch(/width:\s*auto/);
+    expect(itemShellRule).toMatch(/min-width:\s*64px/);
     expect(itemShellRule).toMatch(/min-height:\s*48px/);
     expect(itemRule).toMatch(/min-height:\s*48px/);
     expect(itemRule).toMatch(/padding:\s*4px 8px/);
@@ -3563,7 +4015,7 @@ describe('plugin-ui-layout mobile models', () => {
     expect(activeTabRule).toContain('#642ab5');
   });
 
-  it('should let mobile tabs share the tab bar width like antd-mobile', async () => {
+  it('should let crowded mobile tabs scroll horizontally', async () => {
     renderMobileLayoutWithRouteRepository({
       listAccessible: () =>
         Array.from({ length: 10 }, (_, index) => ({
@@ -3585,12 +4037,17 @@ describe('plugin-ui-layout mobile models', () => {
     const tabbarRule = styleText.match(/\.nb-ui-layout-mobile-home-tabbar\s*\{[^}]+\}/)?.[0];
     const tabbarChildRule = styleText.match(/\.nb-ui-layout-mobile-home-tabbar\s*>\s*div\s*\{[^}]+\}/)?.[0];
     const itemShellRule = styleText.match(/\.nb-ui-layout-mobile-home-tabbar-item-shell\s*\{[^}]+\}/)?.[0];
+    const addRule = styleText.match(/\.nb-ui-layout-mobile-home-tabbar-add\s*\{[^}]+\}/)?.[0];
 
     expect(tabbarRule).toMatch(/display:\s*flex/);
-    expect(tabbarRule).not.toMatch(/overflow-x:\s*auto/);
-    expect(tabbarChildRule).toMatch(/flex:\s*1 1 0%/);
-    expect(itemShellRule).toMatch(/flex:\s*1 1 0%/);
-    expect(itemShellRule).toMatch(/min-width:\s*0/);
+    expect(tabbarRule).toMatch(/overflow-x:\s*auto/);
+    expect(tabbarRule).toMatch(/overflow-y:\s*hidden/);
+    expect(tabbarChildRule).toMatch(/flex:\s*1 0 64px/);
+    expect(tabbarChildRule).toMatch(/min-width:\s*64px/);
+    expect(itemShellRule).toMatch(/flex:\s*1 0 64px/);
+    expect(itemShellRule).toMatch(/min-width:\s*64px/);
+    expect(addRule).toMatch(/position:\s*sticky/);
+    expect(addRule).toMatch(/right:\s*8px/);
   });
 
   it('should register mobile route pages with the mobile root page model', () => {
@@ -4778,8 +5235,14 @@ describe('plugin-ui-layout mobile models', () => {
     });
     const rootPageModel = new MobileRootPageModel({ flowEngine } as never);
     const childPageModel = new MobileChildPageModel({ flowEngine } as never);
-    const rootTabsElement = (rootPageModel.renderTabs() as React.ReactElement).props.children;
-    const childTabsElement = (childPageModel.renderTabs() as React.ReactElement).props.children;
+    const isTabsElement = (child: React.ReactNode): child is React.ReactElement<React.ComponentProps<typeof Tabs>> =>
+      React.isValidElement(child) && child.type === Tabs;
+    const rootTabsElement = React.Children.toArray(
+      (rootPageModel.renderTabs() as React.ReactElement).props.children,
+    ).find(isTabsElement);
+    const childTabsElement = React.Children.toArray(
+      (childPageModel.renderTabs() as React.ReactElement).props.children,
+    ).find(isTabsElement);
     const rootAddTabWrapper = rootPageModel.tabBarExtraContent.right as React.ReactElement;
     const childAddTabWrapper = childPageModel.tabBarExtraContent.right as React.ReactElement;
     const rootLeftSpacer = rootPageModel.tabBarExtraContent.left as React.ReactElement;
@@ -4798,8 +5261,8 @@ describe('plugin-ui-layout mobile models', () => {
     expect(childAddTabButton.props['aria-label']).toBe('Add tab');
     expect(rootAddTabButton.props.children).toBeNull();
     expect(childAddTabButton.props.children).toBeNull();
-    expect(rootTabsElement.props.tabBarExtraContent.right).toBeTruthy();
-    expect(childTabsElement.props.tabBarExtraContent.right).toBeTruthy();
+    expect(rootTabsElement?.props.tabBarExtraContent).toMatchObject({ right: expect.anything() });
+    expect(childTabsElement?.props.tabBarExtraContent).toMatchObject({ right: expect.anything() });
   });
 
   it('should scope mobile page tabs to the current mobile UI layout', () => {
