@@ -169,7 +169,7 @@ describe('resolveAssociationRecordsByText', () => {
     expect(api.request).not.toHaveBeenCalled();
   });
 
-  it('falls back to matching the target primary key when the title field misses', async () => {
+  it('falls back to matching numeric values against the target primary key', async () => {
     const api = {
       request: vi
         .fn()
@@ -178,16 +178,53 @@ describe('resolveAssociationRecordsByText', () => {
     };
     const meta = getAssociationColumnMeta(m2oColumn);
     if (!meta) throw new Error('expected association column meta');
-    // '分类A' 标题命中；'不存在' 标题未命中 → 回退按 id 再查一次，仍无匹配
-    const map = await resolveAssociationRecordsByText(api, meta, ['分类A', '不存在']);
+    // '分类A' 标题命中；'7' 标题未命中但为数字形式 → 回退按 id 再查一次，仍无匹配
+    const map = await resolveAssociationRecordsByText(api, meta, ['分类A', '7']);
     expect(map.get('分类A')).toEqual({ id: 1, name: '分类A' });
-    expect(map.has('不存在')).toBe(false);
+    expect(map.has('7')).toBe(false);
     expect(api.request).toHaveBeenCalledTimes(2);
     expect(api.request).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
         params: expect.objectContaining({
-          filter: JSON.stringify({ id: { $in: ['不存在'] } }),
+          filter: JSON.stringify({ id: { $in: ['7'] } }),
+        }),
+      }),
+    );
+  });
+
+  it('skips the primary-key query for non-numeric unmatched text (no bigint type error)', async () => {
+    const api = {
+      request: vi.fn().mockResolvedValueOnce({ data: { data: [{ id: 1, name: '分类A' }], meta: {} } }),
+    };
+    const meta = getAssociationColumnMeta(m2oColumn);
+    if (!meta) throw new Error('expected association column meta');
+    // 'A4' 这类非数字文本永远不会拼进数字主键查询
+    const map = await resolveAssociationRecordsByText(api, meta, ['分类A', 'A4']);
+    expect(map.get('分类A')).toEqual({ id: 1, name: '分类A' });
+    expect(map.has('A4')).toBe(false);
+    expect(api.request).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps matched rows intact when a fake non-numeric value is pasted alongside real ids', async () => {
+    const api = {
+      request: vi
+        .fn()
+        .mockResolvedValueOnce({ data: { data: [], meta: {} } })
+        .mockResolvedValueOnce({ data: { data: [{ id: 7, name: '编号7' }], meta: {} } }),
+    };
+    const meta = getAssociationColumnMeta(m2oColumn);
+    if (!meta) throw new Error('expected association column meta');
+    const map = await resolveAssociationRecordsByText(api, meta, ['A4', '7']);
+    // 仅数字形式 '7' 走主键回退并命中；'A4' 不触发数字主键查询
+    expect(map.has('A4')).toBe(false);
+    expect(map.get('7')).toEqual({ id: 7, name: '编号7' });
+    expect(api.request).toHaveBeenCalledTimes(2);
+    expect(api.request).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        params: expect.objectContaining({
+          filter: JSON.stringify({ id: { $in: ['7'] } }),
         }),
       }),
     );

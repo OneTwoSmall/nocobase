@@ -9,9 +9,11 @@
 
 import { SearchOutlined } from '@ant-design/icons';
 import { Button, Input, Modal, Spin, Table } from 'antd';
+import { useFlowEngine } from '@nocobase/flow-engine';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { useT } from '../locale';
+import { getFieldTitleMap } from '../utils/fieldMeta';
 import { requestList } from '../utils/lookup';
 import type { LookupConfig } from '../utils/types';
 
@@ -35,10 +37,18 @@ export function LookupPickerModal({
   fieldTitles,
 }: LookupPickerModalProps) {
   const t = useT();
+  const flowEngine = useFlowEngine();
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<any[]>([]);
   const [keyword, setKeyword] = useState('');
   const [pagination, setPagination] = useState({ current: 1, pageSize: 10, total: 0 });
+
+  // 数据源设置的“字段显示名称”：默认从目标集合元数据解析，外部传入的 fieldTitles 优先
+  const resolvedTitles = useMemo(() => {
+    if (!dataSourceKey || !config?.targetCollection) return {};
+    const dataSource = flowEngine?.context?.dataSourceManager?.getDataSource?.(dataSourceKey);
+    return getFieldTitleMap(dataSource?.getCollection?.(config.targetCollection));
+  }, [config?.targetCollection, dataSourceKey, flowEngine]);
 
   const load = useCallback(
     async (page = 1, search = '') => {
@@ -83,13 +93,13 @@ export function LookupPickerModal({
       (name, index, list) => !!name && list.indexOf(name) === index,
     );
     return fieldNames.map((name) => ({
-      title: fieldTitles?.[name] || name,
+      title: fieldTitles?.[name] || resolvedTitles[name] || name,
       dataIndex: name,
       width: 160,
       ellipsis: true,
       render: (value: any) => (value == null || value === '' ? '-' : String(value)),
     }));
-  }, [config, fieldTitles]);
+  }, [config, fieldTitles, resolvedTitles]);
 
   return (
     <Modal title={t('Select record')} open={open} onCancel={onClose} width={800} footer={null} destroyOnClose>

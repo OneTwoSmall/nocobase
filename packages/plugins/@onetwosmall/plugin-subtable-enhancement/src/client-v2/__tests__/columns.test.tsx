@@ -261,4 +261,32 @@ describe('EnhancedSubTableColumnModel settings visibility', () => {
       lookup: { targetCollection: 'materials', targetField: 'code', mappings: [], searchFields: [] },
     });
   });
+
+  it('offers numeric fields by display name in the formula editor options', () => {
+    const engine = new FlowEngine();
+    engine.registerModels({ EnhancedSubTableColumnModel });
+    const model = engine.createModel<any>({
+      use: 'EnhancedSubTableColumnModel',
+      uid: 'EnhancedSubTableColumnModel-formula-ui',
+      props: {},
+    });
+    const flow = model.getFlows().get('enhancedColumnSettings');
+    const ctx = {
+      model: {
+        collection: {
+          getFields: () => [
+            { name: 'qty', title: '数量', interface: 'number' },
+            { name: 'price', uiSchema: { title: '单价' }, interface: 'decimal' },
+            { name: 'note', title: '备注', interface: 'text' },
+          ],
+        },
+      },
+    } as any;
+    const schema = flow.steps.formula.uiSchema(ctx) as any;
+    expect(schema.formula['x-component']).toBe('FormulaEditor');
+    expect(schema.formula['x-component-props'].options).toEqual([
+      { label: '数量', value: 'qty' },
+      { label: '单价', value: 'price' },
+    ]);
+  });
 });

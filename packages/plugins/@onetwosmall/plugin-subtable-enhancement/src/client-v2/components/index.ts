@@ -9,5 +9,6 @@
 
 export * from './EnhancedSubTableField';
 export * from './FieldsVisibilityEditor';
+export * from './FormulaEditor';
 export * from './LookupMappingEditor';
 export * from './LookupPickerModal';

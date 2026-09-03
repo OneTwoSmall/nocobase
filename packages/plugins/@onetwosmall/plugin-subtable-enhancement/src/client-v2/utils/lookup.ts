@@ -128,8 +128,23 @@ export async function resolveRecordsByFields(
       if (!remaining.length) break;
       params.pageSize = remaining.length;
       params.filter = JSON.stringify({ [field]: { $in: remaining } });
-      const { items } = await requestList(api, dataSourceKey, collectionName, { ...params });
-      putItems(items, field);
+      try {
+        const { items } = await requestList(api, dataSourceKey, collectionName, { ...params });
+        putItems(items, field);
+      } catch {
+        // 整组查询失败（如把非数字文本拼进数字字段触发的类型错误）时，
+        // 逐条降级查询：成功的并入映射，无法查询的单条保持未匹配，避免影响其它数据。
+        for (const token of remaining) {
+          try {
+            params.pageSize = 1;
+            params.filter = JSON.stringify({ [field]: { $in: [token] } });
+            const { items } = await requestList(api, dataSourceKey, collectionName, { ...params });
+            putItems(items, field);
+          } catch {
+            // 忽略单条无法匹配的文本
+          }
+        }
+      }
       remaining = remaining.filter((text) => !map.has(normalizeKey(text)));
     }
   }

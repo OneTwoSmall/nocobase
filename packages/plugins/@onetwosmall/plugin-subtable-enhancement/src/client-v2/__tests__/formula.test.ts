@@ -8,8 +8,25 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { evaluateFormula, recalcFormulas } from '../utils/formula';
+import { evaluateFormula, insertFormulaToken, recalcFormulas } from '../utils/formula';
 import { type EnhancedColumnConfig } from '../utils/types';
+
+describe('insertFormulaToken', () => {
+  it('inserts a field token at the given cursor position', () => {
+    expect(insertFormulaToken('{{a}} * ', 'b', 8)).toBe('{{a}} * {{b}}');
+    expect(insertFormulaToken('{{a}}', 'b', 5)).toBe('{{a}}{{b}}');
+  });
+
+  it('appends when there is no formula or cursor is at the end', () => {
+    expect(insertFormulaToken(undefined, 'qty', 0)).toBe('{{qty}}');
+    expect(insertFormulaToken('{{a}}', 'b', 99)).toBe('{{a}}{{b}}');
+  });
+
+  it('clamps the cursor into the string bounds', () => {
+    expect(insertFormulaToken('ab', 'c', -5)).toBe('{{c}}ab');
+    expect(insertFormulaToken('ab', 'c', 10)).toBe('ab{{c}}');
+  });
+});
 
 describe('evaluateFormula', () => {
   it('evaluates expressions with {{variable}} syntax against a scope', () => {

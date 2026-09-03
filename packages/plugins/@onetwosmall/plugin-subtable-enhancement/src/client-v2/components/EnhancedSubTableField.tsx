@@ -189,6 +189,7 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
   const [currentPageSize, setCurrentPageSize] = useState(pageSize);
   const [rows, setRows] = useState<EnhancedSubTableRow[]>(() => initRows(getCurrentValue?.() ?? [], seedBlank));
   const [selectedRowKeys, setSelectedRowKeys] = useState<any[]>([]);
+  const [hoveredRowKey, setHoveredRowKey] = useState<string | null>(null);
   const [pickerState, setPickerState] = useState<{ rowIndex: number; dataIndex: string } | null>(null);
   // 粘贴后 +1，用于重建单元格（下拉/日期等带本地展示状态的字段需要从新值重新挂载）
   const [pasteTick, setPasteTick] = useState(0);
@@ -474,28 +475,26 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
       event.preventDefault();
       event.stopPropagation();
 
-      // 关联（下拉）列：先按显示文本批量解析目标记录，再执行矩阵写入
-      let assocRecords: Record<string, Map<string, any>> = {};
-      try {
-        const associationTasks = collectAssociationPasteTexts(matrix, startRowIdx, startColIdx, enhancedColumns);
-        if (associationTasks.length && api) {
-          const resolved: Array<{ dataIndex: string; recordMap: Map<string, any> }> = [];
-          await Promise.all(
-            associationTasks.map(async ({ columnIndex, texts }) => {
-              const column = enhancedColumns[columnIndex];
-              const meta = getAssociationColumnMeta(column, dataSourceKey);
-              if (!meta) return;
+      // 关联（下拉）列：先按显示文本批量解析目标记录，再执行矩阵写入。
+      // 逐列独立解析：任一列的匹配失败（如个别值触发查询错误）不影响其它列/其它行继续成功。
+      const assocRecords: Record<string, Map<string, any>> = {};
+      const associationTasks = collectAssociationPasteTexts(matrix, startRowIdx, startColIdx, enhancedColumns);
+      if (associationTasks.length && api) {
+        await Promise.all(
+          associationTasks.map(async ({ columnIndex, texts }) => {
+            const column = enhancedColumns[columnIndex];
+            const meta = getAssociationColumnMeta(column, dataSourceKey);
+            if (!meta) return;
+            try {
               // 关联下拉列若配置了回填，一并把回填所需来源字段 append 查回
               const appends = column.lookup ? collectLookupRecordAppends(column.lookup) : [];
               const recordMap = await resolveAssociationRecordsByText(api, meta, texts, appends);
-              resolved.push({ dataIndex: meta.dataIndex, recordMap });
-            }),
-          );
-          assocRecords = Object.fromEntries(resolved.map((entry) => [entry.dataIndex, entry.recordMap]));
-        }
-      } catch {
-        // 解析失败时保留原文并交由下方 issue 汇总提示
-        assocRecords = {};
+              assocRecords[meta.dataIndex] = recordMap;
+            } catch {
+              // 该列解析失败：不写入记录映射，单元格将按“未匹配”保留原文并汇总提示
+            }
+          }),
+        );
       }
 
       // 查找回填列：按列批量解析粘贴文本 → 目标记录，粘贴后不再逐格发请求。
@@ -532,10 +531,47 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
       if (result.lookupTargets.length) {
         pendingLookupsRef.current.push(...result.lookupTargets);
       }
-      if (result.issues.length) {
+
+      // 关联列未命中的提示单独汇总，其它类型 issue 仍按原文保留提示
+      const nonAssocIssues = result.issues.filter((issue) => {
+        const column = enhancedColumns.find((c) => c.dataIndex === issue.dataIndex);
+        return !column || !isBelongsToAssociationColumn(column);
+      });
+      if (nonAssocIssues.length) {
         notify.warning(
-          t('{{count}} cells could not be converted and were kept as text', { count: result.issues.length }),
+          t('{{count}} cells could not be converted and were kept as text', { count: nonAssocIssues.length }),
         );
+      }
+
+      // 关联列匹配统计：命中多少、哪些值未命中（成功行/列不受影响）
+      let assocOk = 0;
+      const assocFailed: string[] = [];
+      const assocFailedUnique: string[] = [];
+      for (let ri = 0; ri < matrix.length; ri++) {
+        for (let ci = 0; ci < matrix[ri].length; ci++) {
+          const column = enhancedColumns[startColIdx + ci];
+          if (!column || !isBelongsToAssociationColumn(column)) continue;
+          const text = matrix[ri][ci].trim();
+          if (!text) continue;
+          if (assocRecords[column.dataIndex]?.has(text)) {
+            assocOk += 1;
+          } else {
+            assocFailed.push(text);
+            if (!assocFailedUnique.includes(text)) {
+              assocFailedUnique.push(text);
+            }
+          }
+        }
+      }
+      if (assocFailed.length) {
+        const base = t('Association paste: {{ok}} matched, {{fail}} not found', {
+          ok: assocOk,
+          fail: assocFailed.length,
+        });
+        const examples = t('Not matched: {{names}}', {
+          names: assocFailedUnique.slice(0, 3).join(', '),
+        });
+        notify.warning(`${base} ${examples}`);
       }
 
       // 关联下拉列（belongsTo + lookup 回填）粘贴命中记录 → 单元格写入记录对象并同步回填映射列
@@ -801,7 +837,6 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
     const start = (currentPage - 1) * currentPageSize;
     return rows.slice(start, start + currentPageSize);
   }, [currentPage, currentPageSize, rows]);
-
   const getRowSelectionKey = useCallback(
     (record: any, pageRowIdx: number) => getSubTableRowIdentity(record, filterTargetKey) ?? `row:${pageRowIdx}`,
     [filterTargetKey],
@@ -863,16 +898,41 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
             render: (text: any, record: any, rowIdx: number) => {
               const pageRowIdx = (currentPage - 1) * currentPageSize + rowIdx;
               const identity = getRowSelectionKey(record, pageRowIdx);
+              // 默认显示序号；鼠标移到序号单元格上、该单元格获得焦点、或该行已被勾选时，
+              // 才切换为勾选框（悬停整行不会触发）
+              const showCheck = selectionEnabled && (hoveredRowKey === identity || selectedRowKeys.includes(identity));
+              const cellProps = selectionEnabled
+                ? {
+                    onMouseEnter: () => setHoveredRowKey(identity),
+                    onMouseLeave: () => setHoveredRowKey((prev) => (prev === identity ? null : prev)),
+                    onFocusCapture: () => setHoveredRowKey(identity),
+                    onBlurCapture: (event: React.FocusEvent<HTMLDivElement>) => {
+                      const next = event.relatedTarget as Node | null;
+                      if (next && event.currentTarget.contains(next)) return;
+                      setHoveredRowKey((prev) => (prev === identity ? null : prev));
+                    },
+                  }
+                : {};
               return (
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
-                  {selectionEnabled && (
+                <div
+                  {...cellProps}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: '100%',
+                    height: '100%',
+                  }}
+                >
+                  {showCheck ? (
                     <Checkbox
                       checked={selectedRowKeys.includes(identity)}
                       disabled={disabled}
                       onChange={(event) => toggleRowSelection(identity, event.target.checked)}
                     />
+                  ) : (
+                    <span>{pageRowIdx + 1}</span>
                   )}
-                  <span>{pageRowIdx + 1}</span>
                 </div>
               );
             },
@@ -950,12 +1010,36 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
         render: (_: any, record: any, index: number) => {
           const pageRowIdx = (currentPage - 1) * currentPageSize + index;
           const identity = getRowSelectionKey(record, pageRowIdx);
+          // 与序号列一致的交互：默认空位；鼠标移到该单元格/获得焦点/已勾选时显示勾选框
+          const showCheck = hoveredRowKey === identity || selectedRowKeys.includes(identity);
           return (
-            <Checkbox
-              checked={selectedRowKeys.includes(identity)}
-              disabled={disabled}
-              onChange={(event) => toggleRowSelection(identity, event.target.checked)}
-            />
+            <div
+              onMouseEnter={() => setHoveredRowKey(identity)}
+              onMouseLeave={() => setHoveredRowKey((prev) => (prev === identity ? null : prev))}
+              onFocusCapture={() => setHoveredRowKey(identity)}
+              onBlurCapture={(event) => {
+                const next = event.relatedTarget as Node | null;
+                if (next && event.currentTarget.contains(next)) return;
+                setHoveredRowKey((prev) => (prev === identity ? null : prev));
+              }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: '100%',
+                height: '100%',
+              }}
+            >
+              {showCheck ? (
+                <Checkbox
+                  checked={selectedRowKeys.includes(identity)}
+                  disabled={disabled}
+                  onChange={(event) => toggleRowSelection(identity, event.target.checked)}
+                />
+              ) : (
+                <span style={{ display: 'inline-block', width: 16, height: 16 }} />
+              )}
+            </div>
           );
         },
       });
@@ -974,6 +1058,7 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
     handleCellChange,
     handleCopyRow,
     handleDeleteRow,
+    hoveredRowKey,
     parentFieldIndex,
     parentItem,
     pasteTick,

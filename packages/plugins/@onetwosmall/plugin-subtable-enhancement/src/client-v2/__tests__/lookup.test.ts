@@ -15,6 +15,7 @@ import {
   lookupRecord,
   requestList,
   resolveLookupRecordsByText,
+  resolveRecordsByFields,
 } from '../utils/lookup';
 import type { LookupConfig } from '../utils/types';
 
@@ -159,6 +160,23 @@ describe('collectLookupRecordAppends & appends forwarding', () => {
 
   it('returns only the target field when there are no mappings/search fields', () => {
     expect(collectLookupRecordAppends({ targetCollection: 't', targetField: 'code', mappings: [] })).toEqual(['code']);
+  });
+});
+
+describe('resolveRecordsByFields error isolation', () => {
+  it('recovers per token when a whole-chunk query rejects', async () => {
+    const api = {
+      request: vi
+        .fn()
+        .mockRejectedValueOnce(new Error('invalid input syntax for type bigint: "A4"'))
+        .mockResolvedValueOnce({ data: { data: [{ id: 9, code: 'A' }], meta: {} } })
+        .mockResolvedValueOnce({ data: { data: [], meta: {} } }),
+    };
+    // 整组 $in ['A','B'] 失败 → 逐条降级：'A' 命中、'B' 未命中，不向调用方抛错
+    const map = await resolveRecordsByFields(api, 'main', 'materials', ['code'], ['A', 'B']);
+    expect(map.get('A')).toEqual({ id: 9, code: 'A' });
+    expect(map.has('B')).toBe(false);
+    expect(api.request).toHaveBeenCalledTimes(3);
   });
 });
 

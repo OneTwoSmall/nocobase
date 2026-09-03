@@ -31,6 +31,7 @@ describe('EnhancedSubTable models', () => {
     await plugin.load();
 
     expect(registerComponentLoaders).toHaveBeenCalledWith({
+      FormulaEditor: expect.any(Function),
       LookupMappingEditor: expect.any(Function),
       FieldsVisibilityEditor: expect.any(Function),
     });

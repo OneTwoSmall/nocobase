@@ -14,6 +14,16 @@ import { type EnhancedColumnConfig, type EnhancedSubTableRow } from './types';
 
 const mathEvaluator = (evaluators as Registry<Evaluator>).get('math.js');
 
+/**
+ * 在指定位置（或末尾）插入字段引用 token，如 {{nastnum}}。供公式编辑器“插入字段”使用。
+ */
+export function insertFormulaToken(formula: string | undefined, fieldName: string, selectionStart: number): string {
+  const current = formula ?? '';
+  const token = `{{${fieldName}}}`;
+  const start = Math.max(0, Math.min(selectionStart, current.length));
+  return current.slice(0, start) + token + current.slice(start);
+}
+
 export function evaluateFormula(expression: string | undefined, scope: Record<string, any>): any {
   if (!expression || !expression.trim()) {
     return undefined;

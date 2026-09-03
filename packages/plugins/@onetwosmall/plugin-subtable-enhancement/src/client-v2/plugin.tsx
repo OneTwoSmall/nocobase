@@ -32,6 +32,7 @@ export class PluginSubtableEnhancementClientV2 extends Plugin<any, Application> 
   async load() {
     seedLocaleResources(this.app.i18n);
     this.flowEngine.flowSettings.registerComponentLoaders({
+      FormulaEditor: () => import('./components/FormulaEditor'),
       LookupMappingEditor: () => import('./components/LookupMappingEditor'),
       FieldsVisibilityEditor: () => import('./components/FieldsVisibilityEditor'),
     });

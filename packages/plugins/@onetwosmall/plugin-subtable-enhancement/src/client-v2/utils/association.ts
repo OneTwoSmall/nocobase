@@ -124,9 +124,15 @@ export function wrapAssociationLookupFill(
   return next;
 }
 
+function isNumericToken(text: string): boolean {
+  return /^-?\d+(?:\.\d+)?$/.test(text);
+}
+
 /**
  * 批量按标题字段解析粘贴文本 → 目标记录（$in 分块查询）。
- * 匹配顺序与 Excel 粘贴一致：先按“当前列标题字段”精确匹配；未命中时回退按目标表主键匹配。
+ * 匹配顺序与 Excel 粘贴一致：先按“当前列标题字段”精确匹配；
+ * 只有“数字形式”的未命中文本才回退按主键匹配 —— 数字主键（如 bigint）无法接受
+ * A4 这类非数字文本，盲目 $in 会让整列查询被 DB 类型错误中断。
  * appends 用于把回填所需的映射来源字段（含关联字段）一并查回。
  */
 export async function resolveAssociationRecordsByText(
@@ -135,11 +141,48 @@ export async function resolveAssociationRecordsByText(
   texts: string[],
   appends: string[] = [],
 ): Promise<Map<string, any>> {
-  const matchFields = [meta.titleField];
-  if (meta.idField && meta.idField !== meta.titleField) {
-    matchFields.push(meta.idField);
+  // 正常路径：先按标题字段精确匹配（不含数字主键类型风险）
+  const map = await resolveRecordsByFields(
+    api,
+    meta.dataSourceKey,
+    meta.collectionName,
+    [meta.titleField],
+    texts,
+    appends,
+  );
+  if (!api || !texts.length || !meta?.idField || meta.idField === meta.titleField) {
+    return map;
   }
-  return resolveRecordsByFields(api, meta.dataSourceKey, meta.collectionName, matchFields, texts, appends);
+
+  const remainingNumeric = Array.from(new Set(texts.map((text) => text.trim()).filter(Boolean))).filter(
+    (text) => !map.has(text) && isNumericToken(text),
+  );
+  if (!remainingNumeric.length) {
+    return map;
+  }
+
+  const CHUNK_SIZE = 100;
+  const params: Record<string, any> = { page: 1 };
+  if (appends.length) {
+    params.appends = appends;
+  }
+  for (let index = 0; index < remainingNumeric.length; index += CHUNK_SIZE) {
+    const chunk = remainingNumeric.slice(index, index + CHUNK_SIZE);
+    params.pageSize = chunk.length;
+    params.filter = JSON.stringify({ [meta.idField]: { $in: chunk } });
+    try {
+      const { items } = await requestList(api, meta.dataSourceKey, meta.collectionName, { ...params });
+      for (const item of items) {
+        const key = item?.[meta.idField];
+        if (key != null) {
+          map.set(String(key).trim(), item);
+        }
+      }
+    } catch {
+      // 数字主键查询失败则跳过该块，保留已由标题字段匹配的结果
+    }
+  }
+  return map;
 }
 
 /**

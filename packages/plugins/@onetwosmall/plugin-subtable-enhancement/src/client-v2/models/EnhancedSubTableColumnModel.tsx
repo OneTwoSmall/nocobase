@@ -12,6 +12,7 @@ import { SubTableColumnModel } from '@nocobase/client-v2';
 
 import { PLUGIN_NAMESPACE, tExpr } from '../locale';
 import { getColumnFieldName, isBelongsToField, isNumericField } from '../utils/columnIdentity';
+import { getFieldDisplayTitle } from '../utils/fieldMeta';
 
 function handleModelName(modelName: string) {
   if (['RadioGroupFieldModel', 'CheckboxGroupFieldModel'].includes(modelName)) {
@@ -106,14 +107,26 @@ EnhancedSubTableColumnModel.registerFlow({
         const field = ctx.model.collectionField;
         return !!ctx.model.props.lookup || !isNumericField(field?.interface);
       },
-      uiSchema: {
-        formula: {
-          type: 'string',
-          title: tExpr('Calculation rule'),
-          'x-decorator': 'FormItem',
-          'x-component': 'Input',
-          description: tExpr('Formula example'),
-        },
+      uiSchema: (ctx) => {
+        // 公式引用按数据源设置的“字段显示名称”列出数字字段，点击即可插入 {{字段名}}
+        const collection = ctx.model.collection;
+        const numericFields = (collection?.getFields?.() ?? []).filter((field: any) =>
+          isNumericField(field?.interface),
+        );
+        const options = numericFields.map((field: any) => ({
+          label: getFieldDisplayTitle(field),
+          value: field?.name,
+        }));
+        return {
+          formula: {
+            type: 'string',
+            title: tExpr('Calculation rule'),
+            'x-decorator': 'FormItem',
+            'x-component': 'FormulaEditor',
+            'x-component-props': { options },
+            description: tExpr('Formula example'),
+          },
+        };
       },
       defaultParams(ctx) {
         return {
