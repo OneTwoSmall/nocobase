@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   applyLookupFill,
   clearLookupFields,
+  collectLookupRecordAppends,
   lookupRecord,
   requestList,
   resolveLookupRecordsByText,
@@ -136,6 +137,28 @@ describe('resolveLookupRecordsByText', () => {
     expect((await resolveLookupRecordsByText(api, 'main', undefined, ['x'])).size).toBe(0);
     expect((await resolveLookupRecordsByText(api, 'main', config, [])).size).toBe(0);
     expect(api.request).not.toHaveBeenCalled();
+  });
+});
+
+describe('collectLookupRecordAppends & appends forwarding', () => {
+  it('derives deduplicated top-level append fields from a lookup config', () => {
+    expect(collectLookupRecordAppends(config)).toEqual(['material_code', 'name', 'specification', 'primary_unit']);
+  });
+
+  it('requests appends when resolving lookup records', async () => {
+    const api = {
+      request: vi.fn().mockResolvedValue({ data: { data: [{ id: 1, material_code: 'M-001' }], meta: {} } }),
+    };
+    await resolveLookupRecordsByText(api, 'main', config, ['M-001']);
+    expect(api.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({ appends: expect.arrayContaining(['primary_unit']) }),
+      }),
+    );
+  });
+
+  it('returns only the target field when there are no mappings/search fields', () => {
+    expect(collectLookupRecordAppends({ targetCollection: 't', targetField: 'code', mappings: [] })).toEqual(['code']);
   });
 });
 

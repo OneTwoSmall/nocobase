@@ -12,6 +12,7 @@ import {
   collectAssociationPasteTexts,
   collectBelongsToColumnIndexes,
   collectLookupPasteTexts,
+  fetchAssociationRecordById,
   getAssociationColumnMeta,
   isBelongsToAssociationColumn,
   resolveAssociationRecordsByText,
@@ -43,7 +44,7 @@ describe('isBelongsToAssociationColumn', () => {
         field: { interface: 'm2o', target: 'a' },
         lookup: { targetCollection: 'a', targetField: 'id', mappings: [] },
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       isBelongsToAssociationColumn({ dataIndex: 'x', field: { interface: 'm2o', target: 'a' }, formula: 'a' }),
     ).toBe(false);
@@ -294,5 +295,90 @@ describe('collectLookupPasteTexts', () => {
     const matrix = [['M-001']];
     const tasks = collectLookupPasteTexts(matrix, 0, 1, [m2oColumn, lookupColumn]);
     expect(tasks).toEqual([{ columnIndex: 1, texts: ['M-001'] }]);
+  });
+});
+
+describe('association columns combined with lookup & fill', () => {
+  const assocWithLookup: EnhancedColumnConfig = {
+    dataIndex: 'category',
+    titleField: 'name',
+    field: m2oField,
+    lookup: {
+      targetCollection: 'categories',
+      targetField: 'name',
+      mappings: [{ sourceField: 'name', targetColumn: 'note' }],
+      searchFields: ['name'],
+    },
+  };
+  const noteColumn: EnhancedColumnConfig = { dataIndex: 'note', field: { interface: 'input' } };
+
+  it('still resolves association meta when lookup is configured', () => {
+    const meta = getAssociationColumnMeta(assocWithLookup);
+    expect(meta).toMatchObject({ dataIndex: 'category', collectionName: 'categories', titleField: 'name' });
+  });
+
+  it('is collected as an association (belongsTo) paste column, not a plain lookup column', () => {
+    const matrix = [
+      ['分类A', 'M-001'],
+      ['分类B', 'M-002'],
+    ];
+    // 关联列下标0：走关联粘贴解析；普通查找列下标1：走查找列批量解析
+    const assocTasks = collectAssociationPasteTexts(matrix, 0, 0, [assocWithLookup, noteColumn]);
+    expect(assocTasks).toEqual([{ columnIndex: 0, texts: ['分类A', '分类B'] }]);
+
+    const lookupColumns: EnhancedColumnConfig[] = [
+      {
+        dataIndex: 'material_code',
+        field: { interface: 'input' },
+        lookup: { targetCollection: 'm', targetField: 'c', mappings: [] },
+      },
+      assocWithLookup,
+    ];
+    const matrix2 = [['M-001', '分类A']];
+    const lookupTasks = collectLookupPasteTexts(matrix2, 0, 0, lookupColumns);
+    expect(lookupTasks).toEqual([{ columnIndex: 0, texts: ['M-001'] }]);
+  });
+
+  it('forwards appends while resolving association records for fill', async () => {
+    const api = {
+      request: vi.fn().mockResolvedValue({ data: { data: [{ id: 1, name: '分类A', note: 'x' }], meta: {} } }),
+    };
+    const meta = getAssociationColumnMeta(assocWithLookup);
+    if (!meta) throw new Error('expected meta');
+    await resolveAssociationRecordsByText(api, meta, ['分类A'], ['name', 'note']);
+    expect(api.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          filter: JSON.stringify({ name: { $in: ['分类A'] } }),
+          appends: ['name', 'note'],
+        }),
+      }),
+    );
+  });
+
+  it('fetches a full record by its primary key', async () => {
+    const api = {
+      request: vi.fn().mockResolvedValue({
+        data: { data: [{ id: 7, name: '分类A', note: '详细' }], meta: {} },
+      }),
+    };
+    const meta = getAssociationColumnMeta(m2oColumn);
+    if (!meta) throw new Error('expected meta');
+    const record = await fetchAssociationRecordById(api, meta, 7, ['note']);
+    expect(record).toEqual({ id: 7, name: '分类A', note: '详细' });
+    expect(api.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          filter: JSON.stringify({ id: 7 }),
+          appends: ['note'],
+        }),
+      }),
+    );
+  });
+
+  it('returns null when fetching by id without a usable meta/id', async () => {
+    const api = { request: vi.fn() };
+    expect(await fetchAssociationRecordById(api, null as any, 1)).toBeNull();
+    expect(api.request).not.toHaveBeenCalled();
   });
 });

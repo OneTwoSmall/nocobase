@@ -23,7 +23,7 @@ import React from 'react';
 import { EnhancedSubTableField } from '../components/EnhancedSubTableField';
 import { EnhancedSubTableColumnModel } from './EnhancedSubTableColumnModel';
 import { PLUGIN_NAMESPACE, tExpr } from '../locale';
-import { dedupeColumnModels, getColumnFieldName, isBelongsToField } from '../utils/columnIdentity';
+import { dedupeColumnModels, getColumnFieldName } from '../utils/columnIdentity';
 import { type EnhancedColumnConfig } from '../utils/types';
 
 function adjustColumnOrder(columns: any[]) {
@@ -137,8 +137,7 @@ export class EnhancedSubTableFieldModel extends SubTableFieldModel {
           title: column?.props?.title,
           width: column?.props?.width,
           field: collectionField,
-          // 关联字段下拉框列不参与“查找回填”（Excel 粘贴按标题字段选择记录仍由组件承担）
-          lookup: isBelongsToField(collectionField) ? undefined : column?.props?.lookup,
+          lookup: column?.props?.lookup,
           formula: column?.props?.formula,
           titleField,
         };

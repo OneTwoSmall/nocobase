@@ -251,7 +251,9 @@ export function applyPasteMatrix(
       colCount = Math.max(colCount, ci + 1);
       if (column.formula) continue;
       const raw = matrix[ri][ci];
-      if (column.lookup) {
+      // 仅“普通查找列”（非 belongsTo 下拉列）走标量匹配/回填路径；
+      // belongsTo 下拉列（含带 lookup 配置的）由 convertCellValue 写入目标记录对象
+      if (column.lookup && !isBelongsToAssociationColumn(column)) {
         // 查找回填列：粘贴的匹配值原样写入，并登记后续批量校验/回填
         const value = raw.trim();
         row[column.dataIndex] = value;

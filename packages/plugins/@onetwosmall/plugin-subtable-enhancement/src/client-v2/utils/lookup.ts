@@ -65,6 +65,77 @@ function normalizeKey(value: any) {
   return value == null ? '' : String(value).trim();
 }
 
+/** 取字段路径的首段并去重，用于 list 请求的 appends（如 'primary_unit.unit_name' → 'primary_unit'）。 */
+export function buildAppendFields(fields: Array<string | undefined | null>): string[] {
+  const result: string[] = [];
+  for (const field of fields || []) {
+    if (!field) continue;
+    const top = String(field).split('.').filter(Boolean)[0];
+    if (top && !result.includes(top)) {
+      result.push(top);
+    }
+  }
+  return result;
+}
+
+/** 从查找回填配置收集所需的 append 字段：匹配字段、搜索字段与所有映射来源字段。 */
+export function collectLookupRecordAppends(config: LookupConfig | undefined): string[] {
+  if (!config) return [];
+  return buildAppendFields([
+    config.targetField,
+    ...(config.searchFields || []),
+    ...(config.mappings || []).map((mapping) => mapping?.sourceField),
+  ]);
+}
+
+/**
+ * 通用批量解析：按 matchFields 依次对去重后的文本做 $in 分块精确查询，
+ * 前一个字段命中的文本不再参与后续字段，保证匹配顺序（先到先得）。
+ */
+export async function resolveRecordsByFields(
+  api: any,
+  dataSourceKey: string | undefined,
+  collectionName: string,
+  matchFields: Array<string | undefined | null>,
+  texts: string[],
+  appends: string[] = [],
+): Promise<Map<string, any>> {
+  const map = new Map<string, any>();
+  const fields = (matchFields || [])
+    .filter((field): field is string => !!field)
+    .filter((field, index, list) => list.indexOf(field) === index);
+  if (!api || !collectionName || !fields.length || !texts.length) return map;
+  const unique = Array.from(new Set(texts.map((text) => text.trim()).filter(Boolean)));
+  if (!unique.length) return map;
+
+  const CHUNK_SIZE = 100;
+  const putItems = (items: any[], keyField: string) => {
+    for (const item of items) {
+      const key = normalizeKey(item?.[keyField]);
+      if (key && !map.has(key)) {
+        map.set(key, item);
+      }
+    }
+  };
+  const params: RequestListParams = { page: 1 };
+  if (appends.length) {
+    params.appends = appends;
+  }
+
+  for (let index = 0; index < unique.length; index += CHUNK_SIZE) {
+    let remaining = unique.slice(index, index + CHUNK_SIZE);
+    for (const field of fields) {
+      if (!remaining.length) break;
+      params.pageSize = remaining.length;
+      params.filter = JSON.stringify({ [field]: { $in: remaining } });
+      const { items } = await requestList(api, dataSourceKey, collectionName, { ...params });
+      putItems(items, field);
+      remaining = remaining.filter((text) => !map.has(normalizeKey(text)));
+    }
+  }
+  return map;
+}
+
 /**
  * 批量按查找配置解析粘贴文本 → 目标记录。匹配字段顺序：
  * 先按 config.targetField 精确匹配，再按配置的 searchFields 依次兜底。
@@ -76,42 +147,17 @@ export async function resolveLookupRecordsByText(
   config: LookupConfig | undefined,
   texts: string[],
 ): Promise<Map<string, any>> {
-  const map = new Map<string, any>();
-  if (!api || !config?.targetCollection || !config?.targetField || !texts.length) return map;
-  const unique = Array.from(new Set(texts.map((text) => text.trim()).filter(Boolean)));
-  if (!unique.length) return map;
-
-  const matchFields = [config.targetField];
-  for (const field of config.searchFields || []) {
-    if (field && !matchFields.includes(field)) {
-      matchFields.push(field);
-    }
+  if (!api || !config?.targetCollection || !config?.targetField || !texts.length) {
+    return new Map<string, any>();
   }
-
-  const CHUNK_SIZE = 100;
-  const putItems = (items: any[], keyField: string) => {
-    for (const item of items) {
-      const key = normalizeKey(item?.[keyField]);
-      if (key && !map.has(key)) {
-        map.set(key, item);
-      }
-    }
-  };
-
-  for (let index = 0; index < unique.length; index += CHUNK_SIZE) {
-    let remaining = unique.slice(index, index + CHUNK_SIZE);
-    for (const field of matchFields) {
-      if (!remaining.length) break;
-      const { items } = await requestList(api, dataSourceKey, config.targetCollection, {
-        page: 1,
-        pageSize: remaining.length,
-        filter: JSON.stringify({ [field]: { $in: remaining } }),
-      });
-      putItems(items, field);
-      remaining = remaining.filter((text) => !map.has(normalizeKey(text)));
-    }
-  }
-  return map;
+  return resolveRecordsByFields(
+    api,
+    dataSourceKey,
+    config.targetCollection,
+    [config.targetField, ...(config.searchFields || [])],
+    texts,
+    collectLookupRecordAppends(config),
+  );
 }
 
 export function applyLookupFill(row: Record<string, any>, config: LookupConfig, record: any): Record<string, any> {

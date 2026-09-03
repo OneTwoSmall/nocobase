@@ -227,6 +227,34 @@ describe('applyPasteMatrix', () => {
     expect(result.lookupTargets).toEqual([{ rowIndex: 0, dataIndex: 'material_code' }]);
   });
 
+  it('writes record objects for belongsTo columns even when a lookup config is present', () => {
+    const assocWithLookup: EnhancedColumnConfig = {
+      dataIndex: 'category',
+      field: {
+        interface: 'm2o',
+        type: 'belongsTo',
+        target: 'categories',
+        targetCollectionTitleFieldName: 'name',
+        targetCollection: { filterTargetKey: 'id' },
+      },
+      lookup: {
+        targetCollection: 'categories',
+        targetField: 'name',
+        mappings: [{ sourceField: 'name', targetColumn: 'note' }],
+      },
+    };
+    const noteColumn: EnhancedColumnConfig = { dataIndex: 'note', field: { interface: 'input' } };
+    const rows = [createRow()];
+    const assocRecords = new Map([['分类A', { id: 1, name: '分类A', note: 'x' }]]);
+    const result = applyPasteMatrix(rows, 0, 0, [['分类A']], [assocWithLookup, noteColumn], {
+      category: assocRecords,
+    });
+    // 关联下拉列（即使带 lookup 配置）仍按关联列写入目标记录对象
+    expect(result.rows[0].category).toEqual({ id: 1, name: '分类A', note: 'x' });
+    // 且不再进入“普通查找列”的标量校验队列
+    expect(result.lookupTargets).toEqual([]);
+  });
+
   it('appends rows when pasting beyond the current length', () => {
     const rows: any[] = [];
     const result = applyPasteMatrix(rows, 2, 0, [['x']], columns);

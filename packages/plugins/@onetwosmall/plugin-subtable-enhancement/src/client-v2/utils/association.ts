@@ -7,17 +7,18 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import { applyLookupFill, requestList } from './lookup';
+import { applyLookupFill, requestList, resolveRecordsByFields } from './lookup';
 import type { EnhancedColumnConfig, LookupConfig } from './types';
 
 /**
- * 子表格列中可安全粘贴赋值的关联类型：belongsTo（m2o/obo）单值列。
+ * 子表格列中可按“目标记录对象”写入的关联类型：belongsTo（m2o/obo）单值列。
  * 其外键位于当前行，粘贴的显示文本可解析为“目标记录对象”，与原生下拉组件写入的值一致。
+ * 查找回填配置可叠加在此类列上（匹配仍沿用标题字段→主键），因此这里不排除 lookup。
  * hasOne（oho/o2o）等外键位于目标侧，粘贴写入不生效，不处理。
  */
 export function isBelongsToAssociationColumn(column: EnhancedColumnConfig): boolean {
   const field = column.field;
-  if (!field || column.lookup || column.formula) return false;
+  if (!field || column.formula) return false;
   const iface = field.interface;
   return (iface === 'm2o' || iface === 'obo') && !!field.target;
 }
@@ -124,52 +125,46 @@ export function wrapAssociationLookupFill(
 }
 
 /**
- * 批量按标题字段解析粘贴文本 → 目标记录（$in 分块查询，单值即可命中 id）。
- * 匹配顺序：先按“当前列标题字段”精确匹配；未命中时回退按目标表主键匹配
- * （支持直接把主键值从 Excel 粘贴进来）。
+ * 批量按标题字段解析粘贴文本 → 目标记录（$in 分块查询）。
+ * 匹配顺序与 Excel 粘贴一致：先按“当前列标题字段”精确匹配；未命中时回退按目标表主键匹配。
+ * appends 用于把回填所需的映射来源字段（含关联字段）一并查回。
  */
 export async function resolveAssociationRecordsByText(
   api: any,
   meta: AssociationColumnMeta,
   texts: string[],
+  appends: string[] = [],
 ): Promise<Map<string, any>> {
-  const map = new Map<string, any>();
-  if (!api || !texts.length) return map;
-  const unique = Array.from(new Set(texts.map((text) => text.trim()).filter(Boolean)));
-  if (!unique.length) return map;
-
-  const normalizeKey = (value: any) => (value == null ? '' : String(value).trim());
-  const CHUNK_SIZE = 100;
-  const putItems = (items: any[], keyField: string) => {
-    for (const item of items) {
-      const key = normalizeKey(item?.[keyField]);
-      if (key && !map.has(key)) {
-        map.set(key, item);
-      }
-    }
-  };
-
-  const { titleField, idField } = meta;
-  for (let index = 0; index < unique.length; index += CHUNK_SIZE) {
-    const chunk = unique.slice(index, index + CHUNK_SIZE);
-    const { items } = await requestList(api, meta.dataSourceKey, meta.collectionName, {
-      page: 1,
-      pageSize: chunk.length,
-      filter: JSON.stringify({ [titleField]: { $in: chunk } }),
-    });
-    putItems(items, titleField);
-    // 标题未命中的文本回退按主键查找（同一记录可能通过 id 被命中）
-    const remaining = chunk.filter((text) => !map.has(normalizeKey(text)));
-    if (remaining.length && idField && idField !== titleField) {
-      const idResult = await requestList(api, meta.dataSourceKey, meta.collectionName, {
-        page: 1,
-        pageSize: remaining.length,
-        filter: JSON.stringify({ [idField]: { $in: remaining } }),
-      });
-      putItems(idResult.items, idField);
-    }
+  const matchFields = [meta.titleField];
+  if (meta.idField && meta.idField !== meta.titleField) {
+    matchFields.push(meta.idField);
   }
-  return map;
+  return resolveRecordsByFields(api, meta.dataSourceKey, meta.collectionName, matchFields, texts, appends);
+}
+
+/**
+ * 按主键取回一条完整记录（含回填所需 append 字段）。下拉框直接选择记录时，
+ * 单元格里可能只有 id + 标题，需要再按主键取回完整记录用于回填。
+ */
+export async function fetchAssociationRecordById(
+  api: any,
+  meta: AssociationColumnMeta,
+  idValue: any,
+  appends: string[] = [],
+): Promise<any | null> {
+  if (!api || !meta?.collectionName || !meta?.idField || idValue == null) {
+    return null;
+  }
+  const params: Record<string, any> = {
+    page: 1,
+    pageSize: 1,
+    filter: JSON.stringify({ [meta.idField]: idValue }),
+  };
+  if (appends.length) {
+    params.appends = appends;
+  }
+  const { items } = await requestList(api, meta.dataSourceKey, meta.collectionName, params);
+  return items.length ? items[0] : null;
 }
 
 /**
@@ -202,8 +197,8 @@ export function collectAssociationPasteTexts(
 
 /**
  * 从待粘贴矩阵中收集各“查找回填”（lookup）列命中的去重文本，
- * 返回按 enhancedColumns 下标分组的列表。查找列的值通常是被粘贴的
- * 目标表匹配字段（如物料编码），按列批量解析后即可同步回填。
+ * 返回按 enhancedColumns 下标分组的列表。belongsTo 下拉列已并入“关联列”批量解析
+ * （单元格写入记录对象 + 直接回填），不再走普通查找列的标量校验路径。
  */
 export function collectLookupPasteTexts(
   matrix: string[][],
@@ -216,7 +211,7 @@ export function collectLookupPasteTexts(
     row.forEach((cell, ci) => {
       const colIndex = startColIdx + ci;
       const column = columns[colIndex];
-      if (!column || !column.lookup) return;
+      if (!column || !column.lookup || isBelongsToAssociationColumn(column)) return;
       const text = cell.trim();
       if (!text) return;
       const texts = byColumn.get(colIndex) ?? new Set<string>();

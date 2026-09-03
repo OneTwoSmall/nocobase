@@ -206,15 +206,59 @@ describe('EnhancedSubTableColumnModel settings visibility', () => {
     expect(hide('number', { targetCollection: 'materials', targetField: 'code' })).toBe(true);
   });
 
-  it('hides lookup & fill on association (m2o/obo) dropdown columns', () => {
+  it('allows lookup & fill on association (m2o/obo) dropdown columns too', () => {
     const flow = getSettingsFlow();
     const hide = (field?: any, formula?: string) =>
       flow.steps.lookup.hideInSettings({ model: { props: { formula }, collectionField: field } } as any);
-    expect(hide({ interface: 'm2o', target: 'products' })).toBe(true);
-    expect(hide({ interface: 'obo', target: 'profiles' })).toBe(true);
+    // 关联下拉列允许配置查找回填
+    expect(hide({ interface: 'm2o', target: 'products' })).toBe(false);
+    expect(hide({ interface: 'obo', target: 'profiles' })).toBe(false);
     expect(hide({ interface: 'input' })).toBe(false);
     expect(hide({ interface: 'number' })).toBe(false);
     // 与“计算规则”互斥
     expect(hide({ interface: 'input' }, '{{a}} * {{b}}')).toBe(true);
+  });
+
+  it('prefills the lookup target for association columns in default params', () => {
+    const engine = new FlowEngine();
+    engine.registerModels({ EnhancedSubTableColumnModel });
+    const model = engine.createModel<any>({
+      use: 'EnhancedSubTableColumnModel',
+      uid: 'EnhancedSubTableColumnModel-prefill',
+      props: {},
+    });
+    const flow = model.getFlows().get('enhancedColumnSettings');
+    const ctx = {
+      model: {
+        props: {},
+        collectionField: { interface: 'm2o', target: 'products', targetCollectionTitleFieldName: 'name' },
+      },
+    } as any;
+    expect(flow.steps.lookup.defaultParams(ctx)).toEqual({
+      lookup: {
+        targetCollection: 'products',
+        targetField: 'name',
+        mappings: [],
+        searchFields: ['name'],
+      },
+    });
+  });
+
+  it('normalizes malformed lookup configs on save', () => {
+    const engine = new FlowEngine();
+    engine.registerModels({ EnhancedSubTableColumnModel });
+    const model = engine.createModel<any>({
+      use: 'EnhancedSubTableColumnModel',
+      uid: 'EnhancedSubTableColumnModel-normalize',
+      props: {},
+    });
+    const flow = model.getFlows().get('enhancedColumnSettings');
+    const setProps = vi.fn();
+    const ctx = { model: { props: {}, setProps } } as any;
+    // 残缺/历史配置 → 保存为规范结构，不再抛错
+    flow.steps.lookup.handler(ctx, { lookup: { targetCollection: 'materials', targetField: 'code' } } as any);
+    expect(setProps).toHaveBeenCalledWith({
+      lookup: { targetCollection: 'materials', targetField: 'code', mappings: [], searchFields: [] },
+    });
   });
 });

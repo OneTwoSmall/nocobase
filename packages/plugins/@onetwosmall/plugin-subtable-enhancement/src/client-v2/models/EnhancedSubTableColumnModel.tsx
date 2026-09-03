@@ -128,11 +128,10 @@ EnhancedSubTableColumnModel.registerFlow({
     },
     lookup: {
       title: tExpr('Lookup & fill'),
-      // 关联字段下拉框列（m2o/obo）由原生下拉 + Excel 粘贴按标题字段选择记录承担，
-      // 不再叠加“查找回填”；与“计算规则”互斥
+      // 所有可编辑列（含关联字段 m2o/obo 下拉列）都可配置查找回填；
+      // 与“计算规则”互斥
       hideInSettings(ctx) {
-        const field = ctx.model.collectionField;
-        return !!ctx.model.props.formula || isBelongsToField(field);
+        return !!ctx.model.props.formula;
       },
       uiSchema: (ctx) => ({
         lookup: {
@@ -147,22 +146,46 @@ EnhancedSubTableColumnModel.registerFlow({
         },
       }),
       defaultParams(ctx) {
+        const existing = ctx.model.props.lookup;
+        if (existing) {
+          // 规范化历史配置：保证 mappings/searchFields 恒为数组
+          return {
+            lookup: {
+              targetCollection: existing.targetCollection || '',
+              targetField: existing.targetField || '',
+              mappings: Array.isArray(existing.mappings) ? existing.mappings : [],
+              searchFields: Array.isArray(existing.searchFields) ? existing.searchFields : [],
+            },
+          };
+        }
+        // 关联下拉列预填目标集合与标题字段，便于直接使用（运行期仍按“标题字段→主键”匹配）
+        const field = ctx.model.collectionField;
+        let targetCollection = '';
+        let targetField = '';
+        if (isBelongsToField(field)) {
+          targetCollection = field.target || '';
+          targetField = field.targetCollectionTitleFieldName || '';
+        }
         return {
-          lookup: ctx.model.props.lookup || {
-            targetCollection: '',
-            targetField: '',
+          lookup: {
+            targetCollection,
+            targetField,
             mappings: [],
-            searchFields: [],
+            searchFields: targetField ? [targetField] : [],
           },
         };
       },
       handler(ctx, params) {
-        const lookup = params.lookup;
-        // 关联字段下拉框列不保留回填配置（即使历史配置残留也被清掉）
-        if (!lookup?.targetCollection || !lookup?.targetField || isBelongsToField(ctx.model.collectionField)) {
-          ctx.model.setProps({ lookup: undefined });
-          return;
-        }
+        const raw = params.lookup;
+        const lookup =
+          raw && (raw.targetCollection || raw.targetField)
+            ? {
+                targetCollection: raw.targetCollection || '',
+                targetField: raw.targetField || '',
+                mappings: Array.isArray(raw.mappings) ? raw.mappings : [],
+                searchFields: Array.isArray(raw.searchFields) ? raw.searchFields : [],
+              }
+            : undefined;
         ctx.model.setProps({ lookup });
       },
     },
@@ -181,7 +204,8 @@ EnhancedSubTableColumnModel.registerFlow({
           return;
         }
         const lookup = ctx.model.props.lookup;
-        if (lookup?.targetCollection && lookup?.targetField) {
+        const field = ctx.model.collectionField;
+        if (lookup?.targetCollection && lookup?.targetField && !isBelongsToField(field)) {
           fieldModel.setProps({
             placeholder: ctx.t('Input code and press Enter to validate', { ns: [PLUGIN_NAMESPACE, 'client'] }),
           });

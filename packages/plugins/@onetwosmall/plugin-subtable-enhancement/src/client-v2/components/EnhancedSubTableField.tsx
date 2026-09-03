@@ -28,12 +28,19 @@ import {
   collectAssociationPasteTexts,
   collectBelongsToColumnIndexes,
   collectLookupPasteTexts,
+  fetchAssociationRecordById,
   getAssociationColumnMeta,
+  isBelongsToAssociationColumn,
   resolveAssociationRecordsByText,
   wrapAssociationLookupFill,
 } from '../utils/association';
-import { clearLookupFields, lookupRecord, resolveLookupRecordsByText } from '../utils/lookup';
-import { createRow, type EnhancedColumnConfig, type EnhancedSubTableRow } from '../utils/types';
+import {
+  clearLookupFields,
+  collectLookupRecordAppends,
+  lookupRecord,
+  resolveLookupRecordsByText,
+} from '../utils/lookup';
+import { createRow, type EnhancedColumnConfig, type EnhancedSubTableRow, type LookupConfig } from '../utils/types';
 import { LookupPickerModal } from './LookupPickerModal';
 
 type NamePath = Array<string | number>;
@@ -81,6 +88,23 @@ function initRows(value: any[] | undefined, seedBlank: boolean): EnhancedSubTabl
   if (source.length) return source;
   // 新增（create）表单默认给一行空行便于直接录入；编辑表单按实际数据显示（空则空）
   return seedBlank ? [createRow()] : [];
+}
+
+/**
+ * 构建用于选择弹窗/回填的有效查找配置。关联下拉列允许 targetCollection/targetField
+ * 留空：此处按字段自身推导目标集合与标题字段，运行期始终按“标题字段→主键”匹配。
+ */
+function resolvePickerLookup(column: EnhancedColumnConfig | undefined): LookupConfig | null {
+  if (!column?.lookup) return null;
+  if (!isBelongsToAssociationColumn(column)) return column.lookup;
+  const field = column.field;
+  const titleField = column.titleField || field?.targetCollectionTitleFieldName;
+  return {
+    ...column.lookup,
+    targetCollection: column.lookup.targetCollection || field?.target || '',
+    targetField: column.lookup.targetField || titleField || '',
+    searchFields: column.lookup.searchFields?.length ? column.lookup.searchFields : titleField ? [titleField] : [],
+  };
 }
 
 export interface EnhancedSubTableFieldProps {
@@ -177,6 +201,15 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
   // 粘贴预解析结果：dataIndex → (文本 → 目标记录)；未命中的文本以 undefined 值占位，
   // 让 runLookupTasks 直接判定失败而无需再发请求
   const pendingLookupRecordsRef = useRef<Record<string, Map<string, any>>>({});
+  // 关联下拉列（带 lookup 回填）原生选择 → 回填触发相关状态
+  const enhancedColumnsRef = useRef(enhancedColumns);
+  const assocPendingRef = useRef(false);
+  const assocLastSigRef = useRef<Map<string, string>>(new Map());
+  const assocPasteFilledRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    enhancedColumnsRef.current = enhancedColumns;
+  }, [enhancedColumns]);
 
   useEffect(() => {
     rowsRef.current = rows;
@@ -211,6 +244,23 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
     if (!formValuesChangeEmitter?.on || !formValuesChangeEmitter?.off) return;
     const listener = (payload: any) => {
       if (!shouldRefreshForChangedPaths(fieldPathArray, payload?.changedPaths)) return;
+
+      // 关联下拉列（带 lookup 回填）的单元格值由原生下拉直接写入表单，
+      // 当变更路径命中该列（叶子）时标记“需要回填”，由下方 effect 统一处理。
+      const assocLookupIndexes = enhancedColumnsRef.current
+        .filter((column) => isBelongsToAssociationColumn(column) && !!column.lookup)
+        .map((column) => column.dataIndex);
+      const basePath = (normalizeChangedPath(fieldPathArray) ?? []).map(String);
+      const hitAssocLeaf = (Array.isArray(payload?.changedPaths) ? payload.changedPaths : []).some((path) => {
+        const segments = normalizeChangedPath(path);
+        if (!segments || segments.length !== basePath.length + 2) return false;
+        if (!basePath.every((segment, index) => segments[index] === segment)) return false;
+        return assocLookupIndexes.includes(String(segments[segments.length - 1]));
+      });
+      if (hitAssocLeaf) {
+        assocPendingRef.current = true;
+      }
+
       const latest = getCurrentValue?.();
       const latestArray = Array.isArray(latest) ? latest : [];
       if (JSON.stringify(latestArray) !== lastWrittenRef.current) {
@@ -435,7 +485,9 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
               const column = enhancedColumns[columnIndex];
               const meta = getAssociationColumnMeta(column, dataSourceKey);
               if (!meta) return;
-              const recordMap = await resolveAssociationRecordsByText(api, meta, texts);
+              // 关联下拉列若配置了回填，一并把回填所需来源字段 append 查回
+              const appends = column.lookup ? collectLookupRecordAppends(column.lookup) : [];
+              const recordMap = await resolveAssociationRecordsByText(api, meta, texts, appends);
               resolved.push({ dataIndex: meta.dataIndex, recordMap });
             }),
           );
@@ -485,7 +537,43 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
           t('{{count}} cells could not be converted and were kept as text', { count: result.issues.length }),
         );
       }
-      setRows(reseedIfEmpty(result.rows));
+
+      // 关联下拉列（belongsTo + lookup 回填）粘贴命中记录 → 单元格写入记录对象并同步回填映射列
+      const assocFillTargets: Array<{ rowIndex: number; dataIndex: string; record: any }> = [];
+      const assocFilledKeys = new Set<string>();
+      for (let ri = 0; ri < matrix.length; ri++) {
+        const rowIndex = startRowIdx + ri;
+        const rowForKey = result.rows[rowIndex];
+        if (!rowForKey) continue;
+        for (let ci = 0; ci < matrix[ri].length; ci++) {
+          const column = enhancedColumns[startColIdx + ci];
+          if (!column || !column.lookup || !isBelongsToAssociationColumn(column)) continue;
+          const text = matrix[ri][ci].trim();
+          if (!text) continue;
+          const record = assocRecords[column.dataIndex]?.get(text);
+          if (!record) continue;
+          assocFillTargets.push({ rowIndex, dataIndex: column.dataIndex, record });
+          const rowKey = getSubTableRowIdentity(rowForKey, filterTargetKey) ?? `row:${rowIndex}`;
+          assocFilledKeys.add(`${rowKey}:${column.dataIndex}`);
+        }
+      }
+      let nextRows = reseedIfEmpty(result.rows);
+      if (assocFillTargets.length) {
+        nextRows = assocFillTargets.reduce((acc, target) => {
+          const lookup = enhancedColumns.find((column) => column.dataIndex === target.dataIndex)?.lookup;
+          if (!lookup) return acc;
+          const row = acc[target.rowIndex];
+          if (!row) return acc;
+          const copy = [...acc];
+          const filled = wrapAssociationLookupFill(row, lookup, target.record, enhancedColumns, belongsToIndexes);
+          copy[target.rowIndex] = { ...filled, [target.dataIndex]: target.record };
+          return copy;
+        }, nextRows);
+      }
+      if (assocFilledKeys.size) {
+        assocPasteFilledRef.current = new Set([...assocPasteFilledRef.current, ...assocFilledKeys]);
+      }
+      setRows(nextRows);
       // 重建单元格，让下拉/日期等带本地展示状态的字段立即从新值刷新
       setPasteTick((value) => value + 1);
       // 粘贴内容若落在当前页之后，自动跳到包含最后一行粘贴数据的页，便于查看新增行
@@ -498,12 +586,25 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
       setCurrentPage((page) => (page < targetPage ? targetPage : page));
       setSelectedRowKeys([]);
     },
-    [allowPaste, api, currentPageSize, dataSourceKey, enhancedColumns, notify, reseedIfEmpty, t],
+    [
+      allowPaste,
+      api,
+      belongsToIndexes,
+      currentPageSize,
+      dataSourceKey,
+      enhancedColumns,
+      filterTargetKey,
+      notify,
+      reseedIfEmpty,
+      t,
+    ],
   );
 
   const handleCellKeyDown = useCallback(
     (event: React.KeyboardEvent, rowIndex: number, enhancedCol: EnhancedColumnConfig) => {
       if (event.key !== 'Enter' || !enhancedCol.lookup) return;
+      // 关联下拉列使用原生下拉选择，不参与“回车文本校验”
+      if (isBelongsToAssociationColumn(enhancedCol)) return;
       event.preventDefault();
       runLookupTasks([{ rowIndex, dataIndex: enhancedCol.dataIndex }]);
     },
@@ -525,10 +626,16 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
         const next = [...prev];
         const current = next[rowIndex];
         if (!current) return prev;
-        const row = wrapAssociationLookupFill(current, lookup, record, enhancedColumns, belongsToIndexes);
-        const targetValue = record?.[lookup.targetField];
-        if (targetValue !== undefined && targetValue !== null) {
-          row[dataIndex] = targetValue;
+        const filled = wrapAssociationLookupFill(current, lookup, record, enhancedColumns, belongsToIndexes);
+        let row = filled;
+        if (isBelongsToAssociationColumn(enhancedCol)) {
+          // 关联下拉列：单元格写入目标记录对象（下拉框据此回显选中记录）
+          row = { ...filled, [dataIndex]: record };
+        } else {
+          const targetValue = record?.[lookup.targetField];
+          if (targetValue !== undefined && targetValue !== null) {
+            row = { ...filled, [dataIndex]: targetValue };
+          }
         }
         next[rowIndex] = row;
         return next;
@@ -538,6 +645,76 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
     },
     [belongsToIndexes, enhancedColumns],
   );
+
+  // 原生下拉直接选择关联记录 → 取回完整记录并自动回填映射列（选择即回填）
+  useEffect(() => {
+    if (!api || !assocPendingRef.current) return;
+    assocPendingRef.current = false;
+    const assocColumns = enhancedColumns.filter((column) => isBelongsToAssociationColumn(column) && !!column.lookup);
+    if (!assocColumns.length || !rows.length) return;
+
+    const pendingCells: Array<{
+      rowIndex: number;
+      column: EnhancedColumnConfig;
+      meta: any;
+      key: string;
+      signature: string;
+    }> = [];
+    const signatureMap = assocLastSigRef.current;
+    rows.forEach((row, rowIndex) => {
+      if (!row) return;
+      const rowKey = getSubTableRowIdentity(row, filterTargetKey) ?? `row:${rowIndex}`;
+      for (const column of assocColumns) {
+        const key = `${rowKey}:${column.dataIndex}`;
+        const value = row[column.dataIndex];
+        const meta = getAssociationColumnMeta(column, dataSourceKey);
+        if (!value || typeof value !== 'object' || !meta?.idField || !meta?.collectionName) continue;
+        const idValue = value[meta.idField];
+        if (idValue == null) continue;
+        const signature = String(idValue);
+        if (assocPasteFilledRef.current.has(key)) {
+          // 粘贴路径已同步处理并填充，避免重复请求
+          assocPasteFilledRef.current.delete(key);
+          continue;
+        }
+        if (signatureMap.get(key) === signature) continue;
+        pendingCells.push({ rowIndex, column, meta, key, signature });
+      }
+    });
+    if (!pendingCells.length) return;
+    for (const cell of pendingCells) {
+      signatureMap.set(cell.key, cell.signature);
+    }
+
+    let cancelled = false;
+    (async () => {
+      const updates: Array<{ rowIndex: number; column: EnhancedColumnConfig; record: any }> = [];
+      for (const cell of pendingCells) {
+        const lookup = cell.column.lookup;
+        if (!lookup) continue;
+        const recordValue = rows[cell.rowIndex]?.[cell.column.dataIndex];
+        const idValue = recordValue?.[cell.meta.idField];
+        const appends = collectLookupRecordAppends(lookup);
+        const fullRecord = await fetchAssociationRecordById(api, cell.meta, idValue, appends);
+        updates.push({ rowIndex: cell.rowIndex, column: cell.column, record: fullRecord || recordValue });
+      }
+      if (cancelled) return;
+      setRows((prev) => {
+        const next = [...prev];
+        for (const update of updates) {
+          const current = next[update.rowIndex];
+          const lookup = update.column.lookup;
+          if (!current || !lookup) continue;
+          const filled = wrapAssociationLookupFill(current, lookup, update.record, enhancedColumns, belongsToIndexes);
+          next[update.rowIndex] = { ...filled, [update.column.dataIndex]: update.record };
+        }
+        return next;
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [api, belongsToIndexes, dataSourceKey, enhancedColumns, filterTargetKey, rows]);
 
   const pagination = useMemo(
     () =>
@@ -588,7 +765,11 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
             backgroundColor: isLookup ? '#fffbe6' : undefined,
           }}
           onPaste={allowPaste ? (event) => handleCellPaste(event, pageRowIdx, enhancedIndex) : undefined}
-          onKeyDown={isLookup ? (event) => handleCellKeyDown(event, pageRowIdx, enhancedCol) : undefined}
+          onKeyDown={
+            isLookup && !isBelongsToAssociationColumn(enhancedCol)
+              ? (event) => handleCellKeyDown(event, pageRowIdx, enhancedCol)
+              : undefined
+          }
         >
           {inner}
           {isLookup && (
@@ -895,7 +1076,9 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
         open={!!pickerState}
         onClose={() => setPickerState(null)}
         config={
-          pickerState ? enhancedColumns.find((column) => column.dataIndex === pickerState.dataIndex)?.lookup : null
+          pickerState
+            ? resolvePickerLookup(enhancedColumns.find((column) => column.dataIndex === pickerState.dataIndex))
+            : null
         }
         dataSourceKey={dataSourceKey}
         api={api}

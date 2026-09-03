@@ -31,10 +31,22 @@ function getFieldOptions(collection: any) {
     }));
 }
 
+/** 规范化历史/残缺的查找回填配置：保证必填字段与数组存在，避免旧数据导致运行时崩溃。 */
+function normalizeConfig(cfg?: LookupConfig | null): LookupConfig {
+  return {
+    targetCollection: cfg?.targetCollection ?? '',
+    targetField: cfg?.targetField ?? '',
+    mappings: Array.isArray(cfg?.mappings)
+      ? cfg.mappings.filter((mapping) => mapping && typeof mapping === 'object')
+      : [],
+    searchFields: Array.isArray(cfg?.searchFields) ? cfg.searchFields.filter(Boolean) : [],
+  };
+}
+
 export function LookupMappingEditor({ value, onChange, dataSourceKey, collectionName }: LookupMappingEditorProps) {
   const t = useT();
   const flowEngine = useFlowEngine();
-  const config: LookupConfig = value || { targetCollection: '', targetField: '', mappings: [], searchFields: [] };
+  const config = normalizeConfig(value);
 
   const collectionOptions = useMemo(() => {
     const dataSource = dataSourceKey
