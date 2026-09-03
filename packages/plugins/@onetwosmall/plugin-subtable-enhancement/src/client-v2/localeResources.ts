@@ -1,0 +1,130 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
+/**
+ * 客户端兜底 locale 字典：与 src/locale/*.json 保持一致（同步测试见 __tests__/locale.test.ts）。
+ * 用于在服务端 locale 管线资源就绪前把插件命名空间注入应用 i18next，避免文案显示为英文。
+ */
+
+const zhCN: Record<string, string> = {
+  'Actions column width': '操作列宽度',
+  'Add mapping': '添加映射',
+  'Add new': '新增',
+  'Are you sure to delete the selected {{count}} rows?': '确定删除选中的 {{count}} 行数据吗？',
+  'Batch delete': '批量删除',
+  'Calculation rule': '计算规则',
+  Cancel: '取消',
+  Clear: '清除',
+  'Copy row': '复制行',
+  'Delete selected rows': '删除选中的行',
+  'Delete this row': '删除此行',
+  'Deselect all': '取消全选',
+  'Displayed fields': '显示字段',
+  'Enable Excel paste': '启用Excel粘贴',
+  'Enable batch delete': '启用批量删除',
+  'Enable copy row': '启用复制行',
+  'Enhanced column settings': '增强列设置',
+  'Enhanced sub-table': '增强子表格',
+  'Enhanced sub-table settings': '增强子表格设置',
+  Field: '字段',
+  Fields: '字段',
+  'Fill mappings': '回填映射',
+  'Formula (math.js)': '公式（math.js）',
+  'Formula example': '公式示例：`{{nastnum}} * {{budget_price}}`，用 {{字段名}} 引用列对应的字段',
+  Hide: '隐藏',
+  'Input code and press Enter to validate': '输入编码后回车验证',
+  'Lookup & fill': '查找回填',
+  'Lookup configuration': '查找回填配置',
+  'Lookup failed': '查找失败',
+  'Lookup validated: {{ok}} passed, {{fail}} invalid': '查找验证: {{ok}} 通过, {{fail}} 无效',
+  'Match field': '匹配字段',
+  'No data': '暂无数据',
+  OK: '确定',
+  'Pasted {{rows}} rows x {{cols}} columns': '已粘贴 {{rows}} 行 x {{cols}} 列',
+  'Row copied': '已复制行',
+  Search: '搜索',
+  'Search columns': '搜索列',
+  'Search fields': '搜索字段',
+  'Select all': '全选',
+  'Select material': '选择记录',
+  'Select record': '选择记录',
+  'Selected {{count}} rows': '已选 {{count}} 行',
+  Show: '显示',
+  'Source field': '来源字段',
+  'Table column': '表格列',
+  'Target collection': '目标数据表',
+  'Target column': '回填列',
+  'Tip: batch delete | lookup column press Enter to validate | click magnifier to pick | Ctrl+V to paste':
+    '💡 可批量删除 | 查找列输入后回车验证 | 点击🔍弹窗选择 | Ctrl+V 粘贴',
+  'Total {{count}} items': '共 {{count}} 条',
+  '{{count}} cells could not be converted and were kept as text':
+    '{{count}} 个单元格未能识别为对应字段类型，已保留原文（日期/选项等请按正确格式填写）',
+  '{{name}} validated': '「{{name}}」验证通过',
+  '{{value}} not found, cleared': '「{{value}}」不存在，已清空',
+};
+
+const enUS: Record<string, string> = {
+  'Actions column width': 'Actions column width',
+  'Add mapping': 'Add mapping',
+  'Add new': 'Add new',
+  'Are you sure to delete the selected {{count}} rows?': 'Are you sure to delete the selected {{count}} rows?',
+  'Batch delete': 'Batch delete',
+  'Calculation rule': 'Calculation rule',
+  Cancel: 'Cancel',
+  Clear: 'Clear',
+  'Copy row': 'Copy row',
+  'Delete selected rows': 'Delete selected rows',
+  'Delete this row': 'Delete this row',
+  'Deselect all': 'Deselect all',
+  'Displayed fields': 'Displayed fields',
+  'Enable Excel paste': 'Enable Excel paste',
+  'Enable batch delete': 'Enable batch delete',
+  'Enable copy row': 'Enable copy row',
+  'Enhanced column settings': 'Enhanced column settings',
+  'Enhanced sub-table': 'Enhanced sub-table',
+  'Enhanced sub-table settings': 'Enhanced sub-table settings',
+  Field: 'Field',
+  Fields: 'Fields',
+  'Fill mappings': 'Fill mappings',
+  'Formula (math.js)': 'Formula (math.js)',
+  'Formula example':
+    'Formula example, e.g. `{{nastnum}} * {{budget_price}}`. Use {{field name}} to reference a column field.',
+  Hide: 'Hide',
+  'Input code and press Enter to validate': 'Input code and press Enter to validate',
+  'Lookup & fill': 'Lookup & fill',
+  'Lookup configuration': 'Lookup configuration',
+  'Lookup failed': 'Lookup failed',
+  'Lookup validated: {{ok}} passed, {{fail}} invalid': 'Lookup validated: {{ok}} passed, {{fail}} invalid',
+  'Match field': 'Match field',
+  'No data': 'No data',
+  OK: 'OK',
+  'Pasted {{rows}} rows x {{cols}} columns': 'Pasted {{rows}} rows x {{cols}} columns',
+  'Row copied': 'Row copied',
+  Search: 'Search',
+  'Search columns': 'Search columns',
+  'Search fields': 'Search fields',
+  'Select all': 'Select all',
+  'Select material': 'Select record',
+  'Select record': 'Select record',
+  'Selected {{count}} rows': 'Selected {{count}} rows',
+  Show: 'Show',
+  'Source field': 'Source field',
+  'Table column': 'Table column',
+  'Target collection': 'Target collection',
+  'Target column': 'Target column',
+  'Tip: batch delete | lookup column press Enter to validate | click magnifier to pick | Ctrl+V to paste':
+    'Tip: batch delete | lookup column press Enter to validate | click magnifier to pick | Ctrl+V to paste',
+  'Total {{count}} items': 'Total {{count}} items',
+  '{{count}} cells could not be converted and were kept as text':
+    '{{count}} cells could not be converted to their field type and were kept as text',
+  '{{name}} validated': '{{name}} validated',
+  '{{value}} not found, cleared': '{{value}} not found, cleared',
+};
+
+export { enUS, zhCN };

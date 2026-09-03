@@ -1,0 +1,22 @@
+{
+  "name": "@onetwosmall/plugin-subtable-enhancement",
+  "version": "2.3.0-beta.6",
+  "main": "dist/server/index.js",
+  "displayName": "Sub-table: Enhanced",
+  "displayName.zh-CN": "子表格：增强",
+  "description": "Enhanced sub-table field component with row numbers, batch delete, copy row, Excel paste, lookup & fill, and client-side formula columns.",
+  "description.zh-CN": "增强型子表格字段组件：行号、批量删除、复制行、Excel 粘贴、查找回填、客户端公式列。",
+  "license": "AGPL-3.0",
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/client-v2": "2.x",
+    "@nocobase/evaluators": "2.x",
+    "@nocobase/flow-engine": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/test": "2.x"
+  },
+  "keywords": [
+    "Sub-table",
+    "Form"
+  ]
+}
