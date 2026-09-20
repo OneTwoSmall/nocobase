@@ -35,10 +35,10 @@ export const CopyFieldsButton = observer(({ model }: CopyFieldsButtonProps) => {
       const labelByKey = new Map<string, string>();
       const children = (EnhancedSubTableColumnModel.defineChildren(model.context as any) as any[]) || [];
       children.forEach((child) => labelByKey.set(child.key, child.label));
-      const visibleNames = (model.mapSubModels?.('columns', (column: any) => getColumnFieldName(column)) ?? []).filter(
-        (name: unknown): name is string => typeof name === 'string' && !!name,
-      );
-      const unique = Array.from(new Set(visibleNames));
+      const visibleNames: string[] = (
+        model.mapSubModels?.('columns', (column: any) => getColumnFieldName(column)) ?? []
+      ).filter((name: unknown): name is string => typeof name === 'string' && !!name);
+      const unique = Array.from(new Set<string>(visibleNames));
       setItems(unique.map((key) => ({ key, label: labelByKey.get(key) ?? key })));
     } catch {
       setItems([]);
