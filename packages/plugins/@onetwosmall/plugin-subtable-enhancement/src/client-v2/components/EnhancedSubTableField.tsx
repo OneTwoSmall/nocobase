@@ -41,6 +41,7 @@ import {
   resolveLookupRecordsByText,
 } from '../utils/lookup';
 import { createRow, type EnhancedColumnConfig, type EnhancedSubTableRow, type LookupConfig } from '../utils/types';
+import { syncColumnDisabled } from '../utils/columnDisabled';
 import { ActionsColumnSettings } from './ActionsColumnSettings';
 import { AddFieldColumn } from './AddFieldColumn';
 import { CopyFieldsButton } from './CopyFieldsButton';
@@ -216,6 +217,16 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
   const assocPendingRef = useRef(false);
   const assocLastSigRef = useRef<Map<string, string>>(new Map());
   const assocPasteFilledRef = useRef<Set<string>>(new Set());
+  // 字段禁用前各列自身的 disabled，字段恢复时用于还原（列自身禁用仍生效）
+  const ownColumnDisabledRef = useRef<WeakMap<object, boolean>>(new WeakMap());
+
+  // 字段级 disabled 透传到列模型：禁用时所有单元格不可编辑；恢复后还原列自身禁用
+  useEffect(() => {
+    const model = props.model;
+    if (!model?.mapSubModels) return;
+    const columns = model.mapSubModels('columns', (column: any) => column) ?? [];
+    syncColumnDisabled(columns, !!disabled, ownColumnDisabledRef.current);
+  }, [props.model, disabled]);
 
   useEffect(() => {
     enhancedColumnsRef.current = enhancedColumns;
@@ -952,7 +963,9 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
           render: (text: any, record: any, rowIdx: number) => {
             const pageRowIdx = (currentPage - 1) * currentPageSize + rowIdx;
             const rowIdentity = getSubTableRowIdentity(record, filterTargetKey) ?? `row:${pageRowIdx}`;
-            const rowBindingKey = `${rowIdentity}:${pageRowIdx}:v${pasteTick}`;
+            // 把列的有效 disabled 并入单元格 key：原生 MemoCell 的 memo 比较器不含 disabled，
+            // 列禁用状态变化时 key 变化可强制其重渲染，否则刷新后需交互一次才显示为禁用
+            const rowBindingKey = `${rowIdentity}:${pageRowIdx}:v${pasteTick}:d${col.disabled ? 1 : 0}`;
             const columnKey = col.dataIndex ?? col.key ?? 'cell';
             const inner = col.render({
               record,
