@@ -894,8 +894,9 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
 
     const dataColumns = (columns ?? [])
       .map((col) => {
-        // 丢弃无 render 的占位列（_empty），以维持数据列自动填满表格宽度的效果
-        if (!col.render) return null;
+        // 保留无 render 的占位列（_empty）：吸收表格多余宽度，使数据列保持各自配置的列宽，
+        // 与原生「表格」区块（empty 占位列）及原生行内子表格（_empty）行为一致
+        if (!col.render) return { ...col };
         // 序号列：展示序号，启用批量删除时首列并入选择框
         if (col.key === '__index__') {
           return {
