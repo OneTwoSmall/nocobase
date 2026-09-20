@@ -7,23 +7,19 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import { SettingOutlined } from '@ant-design/icons';
-import { AddSubModelButton, DndProvider, FlowSettingsButton, useFlowEngine } from '@nocobase/flow-engine';
+import { DndProvider, useFlowEngine } from '@nocobase/flow-engine';
 import {
-  CustomWidth,
   FormItemModel,
   normalizeTableColumnWidth,
   SubTableFieldModel,
   type SubTableColumnModel,
 } from '@nocobase/client-v2';
-import { Divider } from 'antd';
 import { DragEndEvent } from '@dnd-kit/core';
 import React from 'react';
 
 import { EnhancedSubTableField } from '../components/EnhancedSubTableField';
-import { EnhancedSubTableColumnModel } from './EnhancedSubTableColumnModel';
-import { PLUGIN_NAMESPACE, tExpr } from '../locale';
-import { dedupeColumnModels, getColumnFieldName } from '../utils/columnIdentity';
+import { tExpr } from '../locale';
+import { dedupeColumnModels } from '../utils/columnIdentity';
 import { type EnhancedColumnConfig } from '../utils/types';
 
 function adjustColumnOrder(columns: any[]) {
@@ -44,29 +40,9 @@ function adjustColumnOrder(columns: any[]) {
   return [...leftFixedColumns, ...normalColumns, ...rightFixedColumns];
 }
 
-function collectVisibleFieldPaths(model: any): string[] {
-  const names = model?.mapSubModels?.('columns', (column: any) => getColumnFieldName(column)) ?? [];
-  return (names || []).filter(Boolean);
-}
-
 function isSubTableColumnFieldComponentContext(ctx: any) {
   return (ctx?.model?.constructor as any)?.fieldComponentContext === 'subTableColumn';
 }
-
-const AddFieldColumn = ({ model }: { model: any }) => {
-  return (
-    <AddSubModelButton
-      model={model}
-      subModelKey={'columns'}
-      subModelBaseClasses={['EnhancedSubTableColumnModel']}
-      keepDropdownOpen
-    >
-      <FlowSettingsButton icon={<SettingOutlined />}>
-        {model.translate('Fields', { ns: [PLUGIN_NAMESPACE, 'client'] })}
-      </FlowSettingsButton>
-    </AddSubModelButton>
-  );
-};
 
 const HeaderWrapperComponent = React.memo((props: any) => {
   const engine = useFlowEngine();
@@ -108,14 +84,37 @@ export class EnhancedSubTableFieldModel extends SubTableFieldModel {
         ...baseColumns.concat({
           key: '_empty',
         }),
-        this.context.flowSettingsEnabled && {
-          key: 'addColumn',
-          fixed: 'right',
-          width: 100,
-          title: <AddFieldColumn model={this} />,
-        },
       ].filter(Boolean),
     ) as any;
+  }
+
+  /**
+   * 由操作列表头的「复制」按钮调用：更新复制行保留的字段并持久化。
+   * undefined 表示复制全部字段；空数组表示都不复制。
+   */
+  async setCopyFields(copyFields?: string[]) {
+    this.setStepParams('enhancedSubTableSettings', 'copyFields', { copyFields });
+    this.setProps({ copyFields });
+    await this.saveStepParams();
+  }
+
+  /**
+   * 由操作列表头的宽度控件调用：更新操作列宽度并持久化。
+   */
+  async setActionsColumnWidth(width?: number) {
+    const actionsColumnWidth = normalizeTableColumnWidth(width);
+    this.setStepParams('enhancedSubTableSettings', 'actionsColumnWidth', { actionsColumnWidth });
+    this.setProps({ actionsColumnWidth });
+    await this.saveStepParams();
+  }
+
+  /**
+   * 由操作列表头的固定控件调用：更新操作列的固定位置（左/右）并持久化。
+   */
+  async setActionsColumnFixed(fixed?: 'left' | 'right') {
+    this.setStepParams('enhancedSubTableSettings', 'actionsColumnFixed', { actionsColumnFixed: fixed });
+    this.setProps({ actionsColumnFixed: fixed });
+    await this.saveStepParams();
   }
 
   render() {
@@ -177,6 +176,9 @@ export class EnhancedSubTableFieldModel extends SubTableFieldModel {
         api={this.context.api}
         dataSourceKey={this.collection?.dataSourceKey}
         actionsColumnWidth={this.props.actionsColumnWidth}
+        actionsColumnFixed={this.props.actionsColumnFixed}
+        allowClearAll={this.props.allowClearAll}
+        copyFields={this.props.copyFields}
       />
     );
   }
@@ -191,92 +193,6 @@ EnhancedSubTableFieldModel.registerFlow({
   title: tExpr('Enhanced sub-table settings'),
   sort: 250,
   steps: {
-    fields: {
-      title: tExpr('Displayed fields'),
-      uiSchema: {
-        fields: {
-          type: 'array',
-          'x-decorator': 'FormItem',
-          'x-component': 'FieldsVisibilityEditor',
-        },
-      },
-      defaultParams(ctx) {
-        return {
-          fields: collectVisibleFieldPaths(ctx.model),
-        };
-      },
-      async handler(ctx, params) {
-        const rawFields = Array.isArray(params.fields) ? (params.fields as unknown[]) : [];
-        const desired: string[] = rawFields
-          .filter((field: unknown): field is string => typeof field === 'string' && !!field)
-          .filter((field, index, list) => list.indexOf(field) === index);
-        const desiredSet = new Set(desired);
-
-        // 清理历史遗留的重复列模型（同一字段标识保留首个），避免重复列被持久化
-        const columns = ctx.model.subModels?.columns;
-        if (Array.isArray(columns)) {
-          const seen = new Set<string>();
-          const duplicates: any[] = [];
-          for (const column of columns) {
-            const name = getColumnFieldName(column);
-            if (name == null) continue;
-            if (seen.has(name)) {
-              duplicates.push(column);
-            } else {
-              seen.add(name);
-            }
-          }
-          for (const duplicate of duplicates) {
-            await duplicate?.destroy?.();
-            const index = columns.indexOf(duplicate);
-            if (index > -1) {
-              columns.splice(index, 1);
-            }
-          }
-        }
-
-        let items: any[] = [];
-        try {
-          items = (EnhancedSubTableColumnModel.defineChildren(ctx.model.context as any) as any[]) || [];
-        } catch {
-          items = [];
-        }
-        const itemByKey = new Map(items.map((item) => [item.key, item]));
-        const current = collectVisibleFieldPaths(ctx.model);
-
-        // 移除被取消勾选的列（customRemove 会按字段标识移除该字段下的所有列）
-        for (const name of current) {
-          if (desiredSet.has(name)) continue;
-          const item = itemByKey.get(name);
-          if (item?.customRemove) {
-            await item.customRemove(ctx.model.context);
-          }
-        }
-
-        // 新增勾选且当前仍不存在的列（移除后重新计算，避免与旧列重复叠加）
-        const remainingNames = new Set(collectVisibleFieldPaths(ctx.model));
-        for (const name of desired) {
-          if (remainingNames.has(name)) continue;
-          const item = itemByKey.get(name);
-          if (!item?.createModelOptions) continue;
-          const engine = ctx.model.flowEngine;
-          if (!engine) continue;
-          const createOpts = await item.createModelOptions();
-          const addedModel = await engine.createModelAsync({
-            ...createOpts,
-            parentId: ctx.model.uid,
-            subKey: 'columns',
-            subType: 'array',
-          });
-          addedModel.isNew = true;
-          addedModel.setParent(ctx.model);
-          ctx.model.addSubModel('columns', addedModel);
-          await addedModel.afterAddAsSubModel();
-          await addedModel.save();
-          remainingNames.add(name);
-        }
-      },
-    },
     allowBatchDelete: {
       title: tExpr('Enable batch delete'),
       uiMode: { type: 'switch', key: 'allowBatchDelete' },
@@ -286,6 +202,18 @@ EnhancedSubTableFieldModel.registerFlow({
       handler(ctx, params) {
         ctx.model.setProps({
           allowBatchDelete: params.allowBatchDelete,
+        });
+      },
+    },
+    allowClearAll: {
+      title: tExpr('Enable delete all'),
+      uiMode: { type: 'switch', key: 'allowClearAll' },
+      defaultParams: {
+        allowClearAll: true,
+      },
+      handler(ctx, params) {
+        ctx.model.setProps({
+          allowClearAll: params.allowClearAll,
         });
       },
     },
@@ -301,6 +229,19 @@ EnhancedSubTableFieldModel.registerFlow({
         });
       },
     },
+    // 配置入口在操作列表头的「复制」按钮（EnhancedSubTableFieldModel.setCopyFields）；
+    // 此处不提供 uiSchema，仅负责在 beforeRender 时从 stepParams 把 copyFields 写回 props，
+    // 因此不会出现在设置抽屉中。
+    copyFields: {
+      title: tExpr('Copy fields'),
+      handler(ctx, params) {
+        const raw = (params as any).copyFields;
+        const copyFields = Array.isArray(raw)
+          ? raw.filter((field: unknown): field is string => typeof field === 'string' && !!field)
+          : undefined;
+        ctx.model.setProps({ copyFields });
+      },
+    },
     allowPaste: {
       title: tExpr('Enable Excel paste'),
       uiMode: { type: 'switch', key: 'allowPaste' },
@@ -313,55 +254,23 @@ EnhancedSubTableFieldModel.registerFlow({
         });
       },
     },
+    // 配置入口在操作列表头的宽度控件（EnhancedSubTableFieldModel.setActionsColumnWidth）；
+    // 此处不提供 uiMode，仅负责在 beforeRender 时从 stepParams 把宽度写回 props。
     actionsColumnWidth: {
       title: tExpr('Actions column width'),
-      uiMode(ctx) {
-        return {
-          type: 'select',
-          key: 'actionsColumnWidth',
-          props: {
-            options: [
-              { label: 60, value: 60 },
-              { label: 70, value: 70 },
-              { label: 80, value: 80 },
-              { label: 90, value: 90 },
-              { label: 100, value: 100 },
-              { label: 110, value: 110 },
-              { label: 120, value: 120 },
-              { label: 140, value: 140 },
-              { label: 160, value: 160 },
-              { label: 180, value: 180 },
-              { label: 200, value: 200 },
-            ],
-            dropdownRender: (menu, setOpen, handleChange) => {
-              return (
-                <>
-                  {menu}
-                  <Divider style={{ margin: '4px 0' }} />
-                  <CustomWidth
-                    setOpen={setOpen}
-                    handleChange={handleChange}
-                    t={ctx.t}
-                    defaultValue={
-                      [60, 70, 80, 90, 100, 110, 120, 140, 160, 180, 200].includes(ctx.model.props.actionsColumnWidth)
-                        ? null
-                        : ctx.model.props.actionsColumnWidth
-                    }
-                  />
-                </>
-              );
-            },
-          },
-        };
-      },
-      defaultParams(ctx) {
-        return {
-          actionsColumnWidth: ctx.model.props.actionsColumnWidth ?? 80,
-        };
-      },
       handler(ctx, params) {
         ctx.model.setProps({
           actionsColumnWidth: normalizeTableColumnWidth(params.actionsColumnWidth),
+        });
+      },
+    },
+    // 配置入口在操作列表头的固定控件（EnhancedSubTableFieldModel.setActionsColumnFixed）；
+    // 此处不提供 uiMode，仅负责在 beforeRender 时从 stepParams 把固定位置写回 props。
+    actionsColumnFixed: {
+      title: tExpr('Fixed'),
+      handler(ctx, params) {
+        ctx.model.setProps({
+          actionsColumnFixed: params.actionsColumnFixed,
         });
       },
     },

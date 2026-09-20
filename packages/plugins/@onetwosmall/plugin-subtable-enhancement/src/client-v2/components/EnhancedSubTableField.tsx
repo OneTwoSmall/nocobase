@@ -41,6 +41,9 @@ import {
   resolveLookupRecordsByText,
 } from '../utils/lookup';
 import { createRow, type EnhancedColumnConfig, type EnhancedSubTableRow, type LookupConfig } from '../utils/types';
+import { ActionsColumnSettings } from './ActionsColumnSettings';
+import { AddFieldColumn } from './AddFieldColumn';
+import { CopyFieldsButton } from './CopyFieldsButton';
 import { LookupPickerModal } from './LookupPickerModal';
 
 type NamePath = Array<string | number>;
@@ -131,9 +134,12 @@ export interface EnhancedSubTableFieldProps {
   onResetFieldValue?: () => void;
   onChange?: (value: any[]) => void;
   allowBatchDelete?: boolean;
+  allowClearAll?: boolean;
   allowCopyRow?: boolean;
+  copyFields?: string[];
   allowPaste?: boolean;
   actionsColumnWidth?: number;
+  actionsColumnFixed?: 'left' | 'right';
   api?: any;
   dataSourceKey?: string;
 }
@@ -162,9 +168,12 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
     onResetFieldValue,
     onChange,
     allowBatchDelete = true,
+    allowClearAll = true,
     allowCopyRow = true,
+    copyFields,
     allowPaste = true,
     actionsColumnWidth = 80,
+    actionsColumnFixed = 'right',
     api,
     dataSourceKey,
   } = props;
@@ -375,6 +384,14 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
     notify.success(t('Batch delete'));
   }, [currentPageSize, filterTargetKey, notify, reseedIfEmpty, selectedRowKeys, t]);
 
+  // 全部删除：一次清空子表格所有行（跨分页），新增表单仍保留一行空行便于继续录入
+  const handleClearAll = useCallback(() => {
+    setRows(() => reseedIfEmpty([]));
+    setCurrentPage(1);
+    setSelectedRowKeys([]);
+    notify.success(t('All rows deleted'));
+  }, [notify, reseedIfEmpty, t]);
+
   const handleCopyRow = useCallback(
     (rowIdx: number) => {
       const source = rowsRef.current[rowIdx];
@@ -387,12 +404,12 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
         const live = getCurrentValue?.();
         const liveArray = Array.isArray(live) ? live : null;
         const sourceOverride = liveArray && rowIdx >= 0 && rowIdx < liveArray.length ? liveArray[rowIdx] : undefined;
-        return copyRowAt(prev, rowIdx, { filterTargetKey, sourceOverride }) ?? prev;
+        return copyRowAt(prev, rowIdx, { filterTargetKey, sourceOverride, fields: copyFields }) ?? prev;
       });
       setSelectedRowKeys([]);
       notify.success(t('Row copied'));
     },
-    [filterTargetKey, getCurrentValue, notify, t],
+    [copyFields, filterTargetKey, getCurrentValue, notify, t],
   );
 
   // belongsTo 关联列 dataIndex 集合：查找回填落到这些列时需写成记录对象
@@ -770,37 +787,27 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
   );
 
   const renderEnhancedCell = useCallback(
-    (col: any, inner: any, pageRowIdx: number, text: any) => {
+    (col: any, inner: any, pageRowIdx: number) => {
       const enhancedIndex = enhancedColumns.findIndex((column) => column.dataIndex === col.dataIndex);
       const enhancedCol = enhancedIndex >= 0 ? enhancedColumns[enhancedIndex] : undefined;
-      if (enhancedCol?.formula) {
-        return (
-          <div
-            style={{
-              width: '100%',
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              padding: '4px 8px',
-            }}
-            title={text == null ? '' : String(text)}
-          >
-            {text ?? ''}
-          </div>
-        );
-      }
-      if (!enhancedCol) {
-        return inner;
-      }
-      const isLookup = !!enhancedCol.lookup && !disabled;
+      // 公式列不再强制只读：直接渲染原生单元格（inner），由原生按列的“显示模式”决定
+      // 可编辑 / 禁用 / 仅显示；公式结果已写入行数据，原生编辑器或展示组件会显示它。
+      const isLookup = !!enhancedCol?.lookup && !enhancedCol?.formula && !disabled;
       return (
         <div
+          className="nb-subtable-cell"
           style={{
+            width: '100%',
+            boxSizing: 'border-box',
             position: 'relative',
             paddingRight: isLookup ? 24 : undefined,
             backgroundColor: isLookup ? '#fffbe6' : undefined,
           }}
-          onPaste={allowPaste ? (event) => handleCellPaste(event, pageRowIdx, enhancedIndex) : undefined}
+          onPaste={
+            allowPaste && enhancedCol && !enhancedCol.formula
+              ? (event) => handleCellPaste(event, pageRowIdx, enhancedIndex)
+              : undefined
+          }
           onKeyDown={
             isLookup && !isBelongsToAssociationColumn(enhancedCol)
               ? (event) => handleCellKeyDown(event, pageRowIdx, enhancedCol)
@@ -887,6 +894,7 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
 
     const dataColumns = (columns ?? [])
       .map((col) => {
+        // 丢弃无 render 的占位列（_empty），以维持数据列自动填满表格宽度的效果
         if (!col.render) return null;
         // 序号列：展示序号，启用批量删除时首列并入选择框
         if (col.key === '__index__') {
@@ -957,17 +965,28 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
               },
               ['aria-describedby']: `field-${String(columnKey)}-${rowBindingKey}`,
             });
-            return renderEnhancedCell(col, inner, pageRowIdx, text);
+            return renderEnhancedCell(col, inner, pageRowIdx);
           },
         };
       })
-      .concat([
-        !disabled && {
-          title: '',
+      .filter(Boolean) as any[];
+
+    const actionsColumn = !disabled
+      ? {
+          // 配置模式下操作列表头承载「字段」「复制」「配置」控件；退出后恢复为用户设置的宽度
+          title: isConfigMode ? (
+            <Space size={4} align="center">
+              <AddFieldColumn model={props.model} />
+              {allowCopyRow && <CopyFieldsButton model={props.model} />}
+              <ActionsColumnSettings model={props.model} />
+            </Space>
+          ) : (
+            ''
+          ),
           key: 'actions',
-          width: actionsColumnWidth,
+          width: isConfigMode ? actionsColumnWidth + 120 : actionsColumnWidth,
           align: 'center',
-          fixed: 'right',
+          fixed: actionsColumnFixed,
           render: (_: any, record: any, index: number) => {
             const pageRowIdx = (currentPage - 1) * currentPageSize + index;
             return (
@@ -995,9 +1014,18 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
               </Space>
             );
           },
-        },
-      ])
-      .filter(Boolean);
+        }
+      : null;
+
+    // 操作列位置：右固定追加到最后；左固定插入到序号列之后
+    if (actionsColumn) {
+      if (actionsColumnFixed === 'left') {
+        const indexPos = dataColumns.findIndex((column) => column.key === '__index__');
+        dataColumns.splice(indexPos >= 0 ? indexPos + 1 : 0, 0, actionsColumn);
+      } else {
+        dataColumns.push(actionsColumn);
+      }
+    }
 
     // 未启用序号列时，仍提供独立的选择列
     if (selectionEnabled && !hasIndexColumn) {
@@ -1046,6 +1074,7 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
     }
     return dataColumns;
   }, [
+    actionsColumnFixed,
     actionsColumnWidth,
     allSelectedOnPage,
     allowCopyRow,
@@ -1059,9 +1088,11 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
     handleCopyRow,
     handleDeleteRow,
     hoveredRowKey,
+    isConfigMode,
     parentFieldIndex,
     parentItem,
     pasteTick,
+    props.model,
     renderEnhancedCell,
     selectedRowKeys,
     selectionEnabled,
@@ -1098,6 +1129,17 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
         className={css`
           .ant-table-cell-ellipsis.ant-table-cell-fix-right-first .ant-table-cell-content {
             display: inline;
+          }
+          /* 让单元格内容填满实际列宽：表格为 fixed 布局且会拉伸到容器宽度，
+             原生单元格包裹层带有固定的内联 width，这里用 !important 覆盖为 100%，
+             使输入框/下拉等元素随列宽一起伸缩 */
+          .nb-subtable-cell {
+            width: 100%;
+            box-sizing: border-box;
+          }
+          .nb-subtable-cell > div {
+            width: 100% !important;
+            box-sizing: border-box;
           }
           .ant-table-footer {
             padding: 0;
@@ -1152,6 +1194,20 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
                     </Button>
                   </Popconfirm>
                 </>
+              )}
+              {allowClearAll && !disabled && rows.length > 0 && (
+                <Popconfirm
+                  title={t('Delete all rows')}
+                  description={t('Are you sure to delete all {{count}} rows?', { count: rows.length })}
+                  onConfirm={handleClearAll}
+                  okText={t('OK')}
+                  cancelText={t('Cancel')}
+                  okButtonProps={{ danger: true }}
+                >
+                  <Button size="small" danger icon={<DeleteOutlined />}>
+                    {t('Delete all')}
+                  </Button>
+                </Popconfirm>
               )}
             </Space>
           </div>

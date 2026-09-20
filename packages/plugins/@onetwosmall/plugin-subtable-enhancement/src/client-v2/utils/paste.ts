@@ -296,6 +296,11 @@ export type CopyRowOptions = {
    * 复制前需以表单里的“最新提交值”为准，避免复制到旧值。
    */
   sourceOverride?: EnhancedSubTableRow;
+  /**
+   * 复制保留的字段（dataIndex）列表。undefined 表示复制全部字段；
+   * 传入数组（含空数组）时只保留列出的字段，空数组即复制为一条不含数据字段的新行。
+   */
+  fields?: string[];
 };
 
 /**
@@ -311,8 +316,17 @@ export function copyRowAt(
   if (rowIdx < 0 || rowIdx >= rows.length) return null;
   const base = options.sourceOverride ?? rows[rowIdx];
   if (!base) return null;
-  const { filterTargetKey } = options;
+  const { filterTargetKey, fields } = options;
   const copied: EnhancedSubTableRow = deepCloneRow(base);
+  // 只保留用户勾选要复制的字段；未配置（undefined）时复制全部字段
+  if (Array.isArray(fields)) {
+    const keep = new Set(fields);
+    for (const key of Object.keys(copied)) {
+      if (!keep.has(key)) {
+        delete copied[key];
+      }
+    }
+  }
   copied.__index__ = uid();
   copied.__is_new__ = true;
   delete copied.__is_stored__;

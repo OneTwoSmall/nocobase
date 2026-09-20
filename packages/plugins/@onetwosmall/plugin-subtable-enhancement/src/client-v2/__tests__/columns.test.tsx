@@ -10,6 +10,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { FlowEngine } from '@nocobase/flow-engine';
 import { EnhancedSubTableColumnModel } from '../models/EnhancedSubTableColumnModel';
+import { SUB_TABLE_ROW_INDEX_VARIABLE } from '../utils/formula';
 
 const binding = {
   modelName: 'InputFieldModel',
@@ -58,7 +59,6 @@ describe('EnhancedSubTableColumnModel.defineChildren', () => {
       expect(item.label).toBe('物料编码');
       expect(item.useModel).toBe('EnhancedSubTableColumnModel');
       expect(typeof item.toggleable).toBe('function');
-      expect(typeof item.customRemove).toBe('function');
 
       const options = await item.createModelOptions();
       expect(options).toMatchObject({
@@ -90,48 +90,6 @@ describe('EnhancedSubTableColumnModel.defineChildren', () => {
       (ctx as any).collection = { ...collection, getFields: () => [{ name: 'raw', title: '无界面字段' }] };
       const items = (await EnhancedSubTableColumnModel.defineChildren(ctx as any)) as any[];
       expect(items).toHaveLength(0);
-    } finally {
-      bindingSpy.mockRestore();
-    }
-  });
-
-  it('removes columns by fieldPath regardless of the column model class', async () => {
-    const bindingSpy = vi
-      .spyOn(EnhancedSubTableColumnModel, 'getDefaultBindingByField')
-      .mockReturnValue(binding as any);
-    try {
-      const destroy = vi.fn().mockResolvedValue(undefined);
-      const legacyColumn = {
-        getStepParams: vi.fn().mockReturnValue({ fieldPath: 'material_code' }),
-        destroy,
-      };
-      const subModels = [legacyColumn];
-      const { ctx } = createCtx();
-      ctx.model.findSubModel = vi.fn((key: string, cb: (m: any) => boolean) => {
-        return subModels.find(cb) || null;
-      });
-      ctx.model.subModels = { columns: subModels };
-
-      const items = (await EnhancedSubTableColumnModel.defineChildren(ctx as any)) as any[];
-      await items[0].customRemove(ctx.model.context);
-
-      expect(destroy).toHaveBeenCalledTimes(1);
-      expect(subModels).toHaveLength(0);
-    } finally {
-      bindingSpy.mockRestore();
-    }
-  });
-
-  it('does nothing when the column is already gone', async () => {
-    const bindingSpy = vi
-      .spyOn(EnhancedSubTableColumnModel, 'getDefaultBindingByField')
-      .mockReturnValue(binding as any);
-    try {
-      const { ctx } = createCtx();
-      const items = (await EnhancedSubTableColumnModel.defineChildren(ctx as any)) as any[];
-      await expect(items[0].customRemove(ctx.model.context)).resolves.toBeUndefined();
-      // 没有匹配列时不做任何删除
-      expect(ctx.model.subModels.columns).toHaveLength(0);
     } finally {
       bindingSpy.mockRestore();
     }
@@ -284,7 +242,9 @@ describe('EnhancedSubTableColumnModel settings visibility', () => {
     } as any;
     const schema = flow.steps.formula.uiSchema(ctx) as any;
     expect(schema.formula['x-component']).toBe('FormulaEditor');
+    // 首位是特殊变量“行号”，其后是数字字段（按显示名称）
     expect(schema.formula['x-component-props'].options).toEqual([
+      { label: 'Row index', value: SUB_TABLE_ROW_INDEX_VARIABLE },
       { label: '数量', value: 'qty' },
       { label: '单价', value: 'price' },
     ]);

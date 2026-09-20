@@ -33,7 +33,6 @@ describe('EnhancedSubTable models', () => {
     expect(registerComponentLoaders).toHaveBeenCalledWith({
       FormulaEditor: expect.any(Function),
       LookupMappingEditor: expect.any(Function),
-      FieldsVisibilityEditor: expect.any(Function),
     });
     expect(registerModelLoaders).toHaveBeenCalledWith({
       EnhancedSubTableFieldModel: { loader: expect.any(Function) },
@@ -72,6 +71,7 @@ describe('EnhancedSubTable models', () => {
     const flow = model.getFlows().get('enhancedSubTableSettings');
     expect(flow).toBeDefined();
     expect(flow.steps.allowBatchDelete.defaultParams).toEqual({ allowBatchDelete: true });
+    expect(flow.steps.allowClearAll.defaultParams).toEqual({ allowClearAll: true });
     expect(flow.steps.allowCopyRow.defaultParams).toEqual({ allowCopyRow: true });
     expect(flow.steps.allowPaste.defaultParams).toEqual({ allowPaste: true });
     // 幽灵行/保留空行设置已移除
@@ -81,32 +81,72 @@ describe('EnhancedSubTable models', () => {
     const ctx = { model: { props: {}, setProps } } as any;
     flow.steps.allowBatchDelete.handler(ctx, { allowBatchDelete: false });
     expect(setProps).toHaveBeenCalledWith({ allowBatchDelete: false });
+    flow.steps.allowClearAll.handler(ctx, { allowClearAll: false });
+    expect(setProps).toHaveBeenCalledWith({ allowClearAll: false });
   });
 
-  it('defines the actions column width step with a default of 80', () => {
+  it('defines hidden copy-fields / actions-column steps that apply props on beforeRender', () => {
     const engine = new FlowEngine();
     engine.registerModels({ EnhancedSubTableFieldModel });
     const model = engine.createModel<any>({
       use: 'EnhancedSubTableFieldModel',
-      uid: 'EnhancedSubTableFieldModel',
+      uid: 'EnhancedSubTableFieldModel-hidden-steps',
       props: {},
     });
     const flow = model.getFlows().get('enhancedSubTableSettings');
+    expect(flow.steps.copyFields).toBeDefined();
     expect(flow.steps.actionsColumnWidth).toBeDefined();
+    expect(flow.steps.actionsColumnFixed).toBeDefined();
+    // 配置入口已移到操作列表头，抽屉中不再提供 uiSchema / uiMode
+    expect(flow.steps.copyFields.uiSchema).toBeUndefined();
+    expect(flow.steps.actionsColumnWidth.uiMode).toBeUndefined();
+    expect(flow.steps.actionsColumnFixed.uiMode).toBeUndefined();
 
     const setProps = vi.fn();
     const ctx = { model: { props: {}, setProps } } as any;
-    expect(flow.steps.actionsColumnWidth.defaultParams(ctx)).toEqual({ actionsColumnWidth: 80 });
-    expect(flow.steps.actionsColumnWidth.uiMode(ctx)).toMatchObject({
-      type: 'select',
-      key: 'actionsColumnWidth',
-    });
+    flow.steps.copyFields.handler(ctx, { copyFields: ['material_code', 'nastnum'] });
+    expect(setProps).toHaveBeenCalledWith({ copyFields: ['material_code', 'nastnum'] });
+    flow.steps.copyFields.handler(ctx, { copyFields: undefined });
+    expect(setProps).toHaveBeenCalledWith({ copyFields: undefined });
 
     flow.steps.actionsColumnWidth.handler(ctx, { actionsColumnWidth: 120 });
     expect(setProps).toHaveBeenCalledWith({ actionsColumnWidth: 120 });
 
-    flow.steps.actionsColumnWidth.handler(ctx, { actionsColumnWidth: 88 });
-    expect(setProps).toHaveBeenCalledWith({ actionsColumnWidth: 88 });
+    flow.steps.actionsColumnFixed.handler(ctx, { actionsColumnFixed: 'left' });
+    expect(setProps).toHaveBeenCalledWith({ actionsColumnFixed: 'left' });
+  });
+
+  it('persists copy fields / actions column width and fixed through the model setters', async () => {
+    const engine = new FlowEngine();
+    engine.registerModels({ EnhancedSubTableFieldModel });
+    const model = engine.createModel<any>({
+      use: 'EnhancedSubTableFieldModel',
+      uid: 'EnhancedSubTableFieldModel-setters',
+      props: {},
+    });
+    const saveStepParams = vi.fn().mockResolvedValue(undefined);
+    model.saveStepParams = saveStepParams;
+
+    await model.setCopyFields(['material_code']);
+    expect(model.props.copyFields).toEqual(['material_code']);
+    expect(model.getStepParams('enhancedSubTableSettings', 'copyFields')).toEqual({
+      copyFields: ['material_code'],
+    });
+    expect(saveStepParams).toHaveBeenCalledTimes(1);
+
+    await model.setActionsColumnWidth(120);
+    expect(model.props.actionsColumnWidth).toBe(120);
+    expect(model.getStepParams('enhancedSubTableSettings', 'actionsColumnWidth')).toEqual({
+      actionsColumnWidth: 120,
+    });
+    expect(saveStepParams).toHaveBeenCalledTimes(2);
+
+    await model.setActionsColumnFixed('left');
+    expect(model.props.actionsColumnFixed).toBe('left');
+    expect(model.getStepParams('enhancedSubTableSettings', 'actionsColumnFixed')).toEqual({
+      actionsColumnFixed: 'left',
+    });
+    expect(saveStepParams).toHaveBeenCalledTimes(3);
   });
 
   it('keeps the native column settings flow inherited from SubTableColumnModel', () => {
@@ -153,136 +193,5 @@ describe('EnhancedSubTable models', () => {
 
     flow.steps.lookup.handler(ctx, { lookup: { targetCollection: '', targetField: '' } });
     expect(setProps).toHaveBeenCalledWith({ lookup: undefined });
-  });
-
-  it('defines the displayed-fields step reporting current visible columns', () => {
-    const engine = new FlowEngine();
-    engine.registerModels({ EnhancedSubTableFieldModel });
-    const model = engine.createModel<any>({
-      use: 'EnhancedSubTableFieldModel',
-      uid: 'EnhancedSubTableFieldModel',
-      props: {},
-    });
-    const flow = model.getFlows().get('enhancedSubTableSettings');
-    expect(flow.steps.fields).toBeDefined();
-    expect(flow.steps.fields.uiSchema.fields).toMatchObject({
-      type: 'array',
-      'x-component': 'FieldsVisibilityEditor',
-    });
-
-    const fakeModel = {
-      mapSubModels: (_key: string, fn: (m: any) => any) =>
-        [
-          { getStepParams: () => ({ fieldPath: 'material_code' }) },
-          { getStepParams: () => ({ fieldPath: 'nastnum' }) },
-          { getStepParams: () => undefined },
-        ].map(fn),
-    };
-    expect(flow.steps.fields.defaultParams({ model: fakeModel })).toEqual({
-      fields: ['material_code', 'nastnum'],
-    });
-  });
-
-  it('applies field visibility changes by removing unchecked and adding checked columns', async () => {
-    const removeMaterialCode = vi.fn().mockResolvedValue(undefined);
-    const removeNastnum = vi.fn().mockResolvedValue(undefined);
-    const defineChildrenSpy = vi.spyOn(EnhancedSubTableColumnModel, 'defineChildren').mockReturnValue([
-      { key: 'material_code', customRemove: removeMaterialCode, createModelOptions: async () => ({}) },
-      { key: 'nastnum', customRemove: removeNastnum, createModelOptions: async () => ({}) },
-    ] as any);
-
-    const addedModel = {
-      isNew: false,
-      setParent: vi.fn(),
-      afterAddAsSubModel: vi.fn().mockResolvedValue(undefined),
-      save: vi.fn().mockResolvedValue(undefined),
-    };
-    const createModelAsync = vi.fn().mockResolvedValue(addedModel);
-    const parentModel = {
-      uid: 'field-model',
-      context: {},
-      flowEngine: { createModelAsync },
-      currentFieldPaths: ['material_code', 'nastnum'],
-      mapSubModels: (_key: string, fn: (m: any) => any) =>
-        parentModel.currentFieldPaths.map((fieldPath: string) => ({ getStepParams: () => ({ fieldPath }) })).map(fn),
-      addSubModel: vi.fn(),
-      subModels: { columns: [] },
-    } as any;
-
-    try {
-      const engine = new FlowEngine();
-      engine.registerModels({ EnhancedSubTableFieldModel });
-      const model = engine.createModel<any>({
-        use: 'EnhancedSubTableFieldModel',
-        uid: 'fields-handler-model',
-        props: {},
-      });
-      const flow = model.getFlows().get('enhancedSubTableSettings');
-
-      // 当前列: [material_code, nastnum]，勾选结果: [material_code] → nastnum 被移除
-      await flow.steps.fields.handler({ model: parentModel }, { fields: ['material_code'] });
-      expect(removeNastnum).toHaveBeenCalledTimes(1);
-      expect(removeMaterialCode).not.toHaveBeenCalled();
-
-      // 勾选新增列: 当前仅 material_code，勾选 [material_code, nastnum] → nastnum 新建
-      removeNastnum.mockClear();
-      removeMaterialCode.mockClear();
-      createModelAsync.mockClear();
-      parentModel.currentFieldPaths = ['material_code'];
-      await flow.steps.fields.handler({ model: parentModel }, { fields: ['material_code', 'nastnum'] });
-      expect(removeNastnum).not.toHaveBeenCalled();
-      expect(removeMaterialCode).not.toHaveBeenCalled();
-      expect(createModelAsync).toHaveBeenCalledTimes(1);
-      expect(addedModel.setParent).toHaveBeenCalledWith(parentModel);
-      expect(addedModel.afterAddAsSubModel).toHaveBeenCalledTimes(1);
-      expect(addedModel.save).toHaveBeenCalledTimes(1);
-    } finally {
-      defineChildrenSpy.mockRestore();
-    }
-  });
-
-  it('deduplicates persisted duplicate columns when fields are saved', async () => {
-    const dupA = { props: { dataIndex: 'material_code' }, destroy: vi.fn().mockResolvedValue(undefined) };
-    const dupB = { props: { dataIndex: 'material_code' }, destroy: vi.fn().mockResolvedValue(undefined) };
-    const kept = { props: { dataIndex: 'nastnum' }, destroy: vi.fn().mockResolvedValue(undefined) };
-    const columns: any[] = [dupA, dupB, kept];
-
-    const defineChildrenSpy = vi.spyOn(EnhancedSubTableColumnModel, 'defineChildren').mockReturnValue([
-      { key: 'material_code', customRemove: vi.fn(), createModelOptions: async () => ({}) },
-      { key: 'nastnum', customRemove: vi.fn(), createModelOptions: async () => ({}) },
-    ] as any);
-
-    const parentModel = {
-      uid: 'fields-dedupe',
-      context: {},
-      flowEngine: { createModelAsync: vi.fn() },
-      subModels: { columns },
-      mapSubModels: (_key: string, fn: (m: any) => any) => columns.map(fn),
-      addSubModel: vi.fn(),
-    } as any;
-
-    try {
-      const engine = new FlowEngine();
-      engine.registerModels({ EnhancedSubTableFieldModel });
-      const model = engine.createModel<any>({
-        use: 'EnhancedSubTableFieldModel',
-        uid: 'fields-dedupe-model',
-        props: {},
-      });
-      const flow = model.getFlows().get('enhancedSubTableSettings');
-
-      // 保存“显示字段”时清理同字段的重复列（保留首个），且不会重复新增
-      await flow.steps.fields.handler({ model: parentModel }, { fields: ['material_code', 'nastnum'] });
-
-      expect(dupB.destroy).toHaveBeenCalledTimes(1);
-      expect(dupA.destroy).not.toHaveBeenCalled();
-      expect(kept.destroy).not.toHaveBeenCalled();
-      expect(columns).toHaveLength(2);
-      expect(columns[0]).toBe(dupA);
-      expect(columns[1]).toBe(kept);
-      expect(parentModel.flowEngine.createModelAsync).not.toHaveBeenCalled();
-    } finally {
-      defineChildrenSpy.mockRestore();
-    }
   });
 });

@@ -9,12 +9,13 @@ This plugin provides an enhanced sub-table field component for many-to-many (`m2
 ## Features
 
 - Add / delete / batch-delete rows with 1-based row numbers; sequence numbers are shown by default, and hovering/focusing a row number reveals that row's checkbox (selected rows keep the checkbox visible)
-- Copy row: inserts a fully isolated deep copy (including belongsTo record objects) right below the source row; primary keys are stripped so the copy is saved as a new record; the copy always reflects the latest committed cell value, so edits are never overwritten by stale data
+- Delete all: clear every row of the sub-table at once (across pages) with a single confirmation
+- Copy row: inserts a fully isolated deep copy (including belongsTo record objects) right below the source row; primary keys are stripped so the copy is saved as a new record; the copy always reflects the latest committed cell value, so edits are never overwritten by stale data; you can configure which fields are copied (defaults to all fields)
 - Create vs edit UX: a create form seeds a single blank input row; an edit form shows exactly the stored data (no trailing empty rows)
 - Excel paste: paste (Ctrl+V) tab-separated clipboard data from any cell; cells are converted by type (number, percent, date, datetime, time, select, checkbox), the paste range extends the table, and unconvertible cells are reported while keeping the original text
 - Association (belongsTo `m2o`/`obo`) dropdown columns: pasting the displayed text auto-resolves and selects the matching record by the column's configured title field (falling back to numeric primary keys only); values that cannot be matched are kept as text and reported in a summary without affecting the other successfully matched rows
 - Lookup & fill columns: available on every editable column (including association dropdowns); type a value and press Enter (or click the magnifier to pick) to resolve a target record and fill the mapped columns; pasted values are resolved in batch, and the picker table headers show the data-source field display names
-- Calculation rule: math.js formulas on numeric columns, recomputed live; the editor lists numeric columns by their data-source display name and inserts the matching `{{field name}}` reference for you
+- Calculation rule: math.js formulas on numeric columns, recomputed live; the editor lists numeric columns by their data-source display name and inserts the matching `{{field name}}` reference for you; a special `{{__rowIndex__}}` variable exposes the current row number (1-based) for use in formulas; whether a formula cell is editable follows the column's **Display mode** (Editable / Disabled / Display only)
 - Localized UI strings (zh-CN / en-US)
 
 ## Installation
@@ -33,28 +34,39 @@ Then, in the modern client, add the field component **Enhanced sub-table** to an
 
 | Setting | Description |
 | --- | --- |
-| Displayed fields | Choose which fields of the target collection are shown as sub-table columns |
 | Enable batch delete | Show checkboxes (revealed on row-number hover/focus) and allow deleting multiple selected rows at once |
+| Enable delete all | Show the **Delete all** action that clears every row of the sub-table at once |
 | Enable copy row | Show the copy-row action on every data row |
 | Enable Excel paste | Allow pasting Excel/copied table content into the sub-table |
-| Actions column width | Width of the row action column |
+
+### Actions column header (UI editor mode)
+
+While editing the UI, the actions column header shows:
+
+| Control | Description |
+| --- | --- |
+| Fields | Add or remove sub-table columns in real time |
+| Copy | Choose which fields are kept when duplicating a row (defaults to all fields) |
+| Settings (gear) | Actions column width and fixed position (left / right; when fixed left it is placed right after the row-number column) |
+
+The actions column is widened while editing and restores the configured width once you exit UI editor mode.
 
 ### Column-level settings
 
 | Setting | Description |
 | --- | --- |
-| Calculation rule | math.js formula computed live for the column; only numeric field columns can configure it, and the editor lets you insert numeric columns by their data-source display name |
+| Calculation rule | math.js formula computed live for the column; only numeric field columns can configure it, and the editor lets you insert numeric columns by their data-source display name plus the special `{{__rowIndex__}}` row-number variable |
 | Lookup & fill | Match a value in this column against a target collection and fill other columns with the matched record's fields; available on all editable columns, including association (`m2o`/`obo`) dropdown columns |
 
 Native column settings (column title, width, fixed position, field component, title field, etc.) continue to apply.
 
 ## How It Works
 
-1. On a create form the sub-table starts with one blank row so data entry can begin immediately; on an edit form it displays only the rows already stored. Use **Add new** to append more rows.
-2. **Copy row** duplicates the row right below itself. Cell values (including nested belongsTo records) are deep-cloned so the copy and the source never share references, and the operation first commits the focused cell so the latest typed value is copied.
+1. On a create form the sub-table starts with one blank row so data entry can begin immediately; on an edit form it displays only the rows already stored. Use **Add new** to append more rows. In UI editor mode, the actions column header provides the **Fields** button to add or remove columns in real time.
+2. **Copy row** duplicates the row right below itself. Cell values (including nested belongsTo records) are deep-cloned so the copy and the source never share references, and the operation first commits the focused cell so the latest typed value is copied. Use the **Copy** button in the actions column header (UI editor mode) to choose which fields are kept; all fields are copied by default.
 3. **Excel paste** reads the clipboard as rows/columns from the clicked cell. Number/date/select-like cells are converted to the field type; pasting into a lookup & fill column resolves the matched record and fills its mapped columns in one batch.
 4. For association dropdown columns, pasted display text is resolved against the target collection by the column's current title field (with a numeric-primary-key fallback). Values that cannot be matched are kept as text and reported in a summary; the successfully matched rows still paste and fill normally.
-5. **Calculation rule** columns are recomputed whenever any of their referenced columns change. In the column settings, the formula editor lists the numeric columns by display name and inserts `{{field name}}` tokens at the cursor.
+5. **Calculation rule** columns are recomputed whenever any of their referenced columns change. In the column settings, the formula editor lists the numeric columns by display name and inserts `{{field name}}` tokens at the cursor. The special `{{__rowIndex__}}` variable resolves to the current 1-based row number and is only injected into the formula scope, never written back into the row data.
 
 ## Notes
 

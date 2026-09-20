@@ -439,4 +439,38 @@ describe('copyRowAt (复制行)', () => {
     expect(copied.required_date).not.toBe(date);
     expect(copied.priority).toBe('urgent');
   });
+
+  it('copies only the configured fields and still strips the primary key', () => {
+    const rows: EnhancedSubTableRow[] = [
+      { id: 9, material_code: 'M-001', materialName: '螺栓', nastnum: 3, __index__: 'src' },
+    ];
+    const result = copyRowAt(rows, 0, { filterTargetKey: 'id', fields: ['material_code', 'nastnum'] });
+    if (!result) throw new Error('expected copied rows');
+    const copied = result[1];
+    expect(copied.material_code).toBe('M-001');
+    expect(copied.nastnum).toBe(3);
+    expect(copied.materialName).toBeUndefined();
+    expect(copied.id).toBeUndefined();
+    expect(copied.__is_new__).toBe(true);
+    // 源行不受影响
+    expect(result[0]).toMatchObject({ id: 9, material_code: 'M-001', materialName: '螺栓', nastnum: 3 });
+  });
+
+  it('copies an empty data row when the configured field list is empty', () => {
+    const rows: EnhancedSubTableRow[] = [{ material_code: 'M-001', nastnum: 3, __index__: 'src' }];
+    const result = copyRowAt(rows, 0, { fields: [] });
+    if (!result) throw new Error('expected copied rows');
+    const copied = result[1];
+    expect(copied.material_code).toBeUndefined();
+    expect(copied.nastnum).toBeUndefined();
+    expect(copied.__is_new__).toBe(true);
+    expect(copied.__index__).toBeTruthy();
+  });
+
+  it('copies all fields when no field list is configured', () => {
+    const rows: EnhancedSubTableRow[] = [{ material_code: 'M-001', nastnum: 3, __index__: 'src' }];
+    const result = copyRowAt(rows, 0, { fields: undefined });
+    if (!result) throw new Error('expected copied rows');
+    expect(result[1]).toMatchObject({ material_code: 'M-001', nastnum: 3 });
+  });
 });

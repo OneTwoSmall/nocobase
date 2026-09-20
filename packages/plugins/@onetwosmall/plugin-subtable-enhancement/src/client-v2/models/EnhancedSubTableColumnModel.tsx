@@ -13,6 +13,7 @@ import { SubTableColumnModel } from '@nocobase/client-v2';
 import { PLUGIN_NAMESPACE, tExpr } from '../locale';
 import { getColumnFieldName, isBelongsToField, isNumericField } from '../utils/columnIdentity';
 import { getFieldDisplayTitle } from '../utils/fieldMeta';
+import { SUB_TABLE_ROW_INDEX_VARIABLE } from '../utils/formula';
 
 function handleModelName(modelName: string) {
   if (['RadioGroupFieldModel', 'CheckboxGroupFieldModel'].includes(modelName)) {
@@ -35,7 +36,7 @@ export class EnhancedSubTableColumnModel extends SubTableColumnModel {
         const fieldModel = handleModelName(binding.modelName);
         const fullName = ctx.fieldPath ? `${ctx.fieldPath}.${field.name}` : field.name;
         // 列的唯一标识使用集合字段名（dataIndex），而非可选的 fieldSettings.fieldPath，
-        // 以便与原生/历史列一起参与 Displayed fields 的去重与增删。
+        // 以便与原生/历史列一起参与字段增删（表格右侧的「字段」按钮）时的去重。
         const columnName = field.name;
 
         return {
@@ -63,23 +64,6 @@ export class EnhancedSubTableColumnModel extends SubTableColumnModel {
               },
             },
           }),
-          // 从原生子表格切换过来的列可能仍是 SubTableColumnModel 实例，
-          // 按类匹配无法移除，这里改为按字段标识定位，并移除该字段下的所有重复列。
-          customRemove: async (removeCtx: any) => {
-            const parentModel = removeCtx?.model;
-            const subModels = parentModel?.subModels?.columns;
-            if (!Array.isArray(subModels)) {
-              return;
-            }
-            const targets = subModels.filter((subModel) => getColumnFieldName(subModel) === columnName);
-            for (const target of targets) {
-              await target?.destroy?.();
-              const index = subModels.indexOf(target);
-              if (index > -1) {
-                subModels.splice(index, 1);
-              }
-            }
-          },
         };
       })
       .filter(Boolean);
@@ -113,10 +97,16 @@ EnhancedSubTableColumnModel.registerFlow({
         const numericFields = (collection?.getFields?.() ?? []).filter((field: any) =>
           isNumericField(field?.interface),
         );
-        const options = numericFields.map((field: any) => ({
-          label: getFieldDisplayTitle(field),
-          value: field?.name,
-        }));
+        // 首位提供特殊变量“行号”，可在公式中引用当前记录在子表格中的第几行（1 起始）。
+        // 该 label 直接展示在字段下拉中，需即时翻译为纯文本（tExpr 仅用于 schema 元数据解析）。
+        const rowIndexLabel = ctx.t?.('Row index', { ns: [PLUGIN_NAMESPACE, 'client'] }) ?? 'Row index';
+        const options = [
+          { label: rowIndexLabel, value: SUB_TABLE_ROW_INDEX_VARIABLE },
+          ...numericFields.map((field: any) => ({
+            label: getFieldDisplayTitle(field),
+            value: field?.name,
+          })),
+        ];
         return {
           formula: {
             type: 'string',

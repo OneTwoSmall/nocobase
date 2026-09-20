@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { evaluateFormula, insertFormulaToken, recalcFormulas } from '../utils/formula';
+import { SUB_TABLE_ROW_INDEX_VARIABLE, evaluateFormula, insertFormulaToken, recalcFormulas } from '../utils/formula';
 import { type EnhancedColumnConfig } from '../utils/types';
 
 describe('insertFormulaToken', () => {
@@ -92,5 +92,31 @@ describe('recalcFormulas', () => {
     const result = recalcFormulas(rows, [columns[0]]);
     expect(result.changed).toBe(false);
     expect(result.rows).toBe(rows);
+  });
+});
+
+describe('recalcFormulas row index variable', () => {
+  it('exposes a 1-based row number in formulas', () => {
+    const cols: EnhancedColumnConfig[] = [
+      { dataIndex: 'nastnum', field: { interface: 'number' } },
+      {
+        dataIndex: 'seq',
+        field: { interface: 'number' },
+        formula: `{{${SUB_TABLE_ROW_INDEX_VARIABLE}}} * 10`,
+      },
+    ];
+    const rows: any[] = [{ nastnum: 1 }, { nastnum: 2 }, { nastnum: 3 }];
+    const result = recalcFormulas(rows, cols);
+    expect(result.changed).toBe(true);
+    expect(result.rows.map((row) => row.seq)).toEqual([10, 20, 30]);
+  });
+
+  it('does not persist the row index variable into row data', () => {
+    const cols: EnhancedColumnConfig[] = [
+      { dataIndex: 'seq', field: { interface: 'number' }, formula: `{{${SUB_TABLE_ROW_INDEX_VARIABLE}}}` },
+    ];
+    const result = recalcFormulas([{ a: 1 }], cols);
+    expect(result.rows[0]).toEqual({ a: 1, seq: 1 });
+    expect(SUB_TABLE_ROW_INDEX_VARIABLE in result.rows[0]).toBe(false);
   });
 });

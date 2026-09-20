@@ -27,7 +27,7 @@ describe('plugin locale resources', () => {
   it('covers the essential plugin strings in zh-CN', () => {
     for (const key of [
       'Enhanced sub-table',
-      'Displayed fields',
+      'Copy fields',
       'Tip: batch delete | lookup column press Enter to validate | click magnifier to pick | Ctrl+V to paste',
     ]) {
       expect(zhCN[key as keyof typeof zhCN]).toBeTruthy();
@@ -36,7 +36,7 @@ describe('plugin locale resources', () => {
   });
 
   it('translates the essential strings to Chinese', () => {
-    expect((zhCN as any)['Displayed fields']).toBe('显示字段');
+    expect((zhCN as any)['Copy fields']).toBe('复制字段');
     expect((zhCN as any)['Enhanced sub-table']).toBe('增强子表格');
   });
 });

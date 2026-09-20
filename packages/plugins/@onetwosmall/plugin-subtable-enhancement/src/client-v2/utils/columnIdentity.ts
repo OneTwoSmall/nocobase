@@ -28,7 +28,7 @@ export function isBelongsToField(field: any): boolean {
 }
 
 /**
- * 解析列模型的“字段标识”。用于 Displayed fields 的增删去重，兼容两类列：
+ * 解析列模型的“字段标识”。用于列的去重与增删匹配，兼容两类列：
  * 增强列带有 fieldSettings.init.fieldPath；原生/历史列仅带 props.dataIndex。
  * 优先级：props.dataIndex > fieldPath 末段 > collectionField.name。
  */
