@@ -31,8 +31,8 @@ import {
   fetchAssociationRecordById,
   getAssociationColumnMeta,
   isBelongsToAssociationColumn,
+  resolveAssociationLookupFill,
   resolveAssociationRecordsByText,
-  wrapAssociationLookupFill,
 } from '../utils/association';
 import {
   clearLookupFields,
@@ -451,13 +451,24 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
           }
         }
         if (record) {
-          setRows((prev) => {
-            const next = [...prev];
-            const current = next[task.rowIndex];
-            if (!current) return prev;
-            next[task.rowIndex] = wrapAssociationLookupFill(current, lookup, record, enhancedColumns, belongsToIndexes);
-            return next;
-          });
+          const current = rowsRef.current[task.rowIndex];
+          if (current) {
+            const filled = await resolveAssociationLookupFill(
+              api,
+              dataSourceKey,
+              current,
+              lookup,
+              record,
+              enhancedColumns,
+              belongsToIndexes,
+            );
+            setRows((prev) => {
+              const next = [...prev];
+              if (!next[task.rowIndex]) return prev;
+              next[task.rowIndex] = filled;
+              return next;
+            });
+          }
           ok += 1;
         } else {
           setRows((prev) => {
@@ -623,16 +634,24 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
       }
       let nextRows = reseedIfEmpty(result.rows);
       if (assocFillTargets.length) {
-        nextRows = assocFillTargets.reduce((acc, target) => {
+        const copy = [...nextRows];
+        for (const target of assocFillTargets) {
           const lookup = enhancedColumns.find((column) => column.dataIndex === target.dataIndex)?.lookup;
-          if (!lookup) return acc;
-          const row = acc[target.rowIndex];
-          if (!row) return acc;
-          const copy = [...acc];
-          const filled = wrapAssociationLookupFill(row, lookup, target.record, enhancedColumns, belongsToIndexes);
+          if (!lookup) continue;
+          const row = copy[target.rowIndex];
+          if (!row) continue;
+          const filled = await resolveAssociationLookupFill(
+            api,
+            dataSourceKey,
+            row,
+            lookup,
+            target.record,
+            enhancedColumns,
+            belongsToIndexes,
+          );
           copy[target.rowIndex] = { ...filled, [target.dataIndex]: target.record };
-          return copy;
-        }, nextRows);
+        }
+        nextRows = copy;
       }
       if (assocFilledKeys.size) {
         assocPasteFilledRef.current = new Set([...assocPasteFilledRef.current, ...assocFilledKeys]);
@@ -676,7 +695,7 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
   );
 
   const handleLookupPick = useCallback(
-    (record: any) => {
+    async (record: any) => {
       const state = pickerStateRef.current;
       if (!state) return;
       const { rowIndex, dataIndex } = state;
@@ -686,11 +705,17 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
         return;
       }
       const lookup = enhancedCol.lookup;
-      setRows((prev) => {
-        const next = [...prev];
-        const current = next[rowIndex];
-        if (!current) return prev;
-        const filled = wrapAssociationLookupFill(current, lookup, record, enhancedColumns, belongsToIndexes);
+      const current = rowsRef.current[rowIndex];
+      if (current) {
+        const filled = await resolveAssociationLookupFill(
+          api,
+          dataSourceKey,
+          current,
+          lookup,
+          record,
+          enhancedColumns,
+          belongsToIndexes,
+        );
         let row = filled;
         if (isBelongsToAssociationColumn(enhancedCol)) {
           // 关联下拉列：单元格写入目标记录对象（下拉框据此回显选中记录）
@@ -701,13 +726,17 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
             row = { ...filled, [dataIndex]: targetValue };
           }
         }
-        next[rowIndex] = row;
-        return next;
-      });
+        setRows((prev) => {
+          const next = [...prev];
+          if (!next[rowIndex]) return prev;
+          next[rowIndex] = row;
+          return next;
+        });
+      }
       setPickerState(null);
       setSelectedRowKeys([]);
     },
-    [belongsToIndexes, enhancedColumns],
+    [api, belongsToIndexes, dataSourceKey, enhancedColumns],
   );
 
   // 原生下拉直接选择关联记录 → 取回完整记录并自动回填映射列（选择即回填）
@@ -752,7 +781,12 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
 
     let cancelled = false;
     (async () => {
-      const updates: Array<{ rowIndex: number; column: EnhancedColumnConfig; record: any }> = [];
+      const updates: Array<{
+        rowIndex: number;
+        column: EnhancedColumnConfig;
+        record: any;
+        filled: Record<string, any>;
+      }> = [];
       for (const cell of pendingCells) {
         const lookup = cell.column.lookup;
         if (!lookup) continue;
@@ -760,17 +794,26 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
         const idValue = recordValue?.[cell.meta.idField];
         const appends = collectLookupRecordAppends(lookup);
         const fullRecord = await fetchAssociationRecordById(api, cell.meta, idValue, appends);
-        updates.push({ rowIndex: cell.rowIndex, column: cell.column, record: fullRecord || recordValue });
+        const record = fullRecord || recordValue;
+        const current = rowsRef.current[cell.rowIndex];
+        if (!current) continue;
+        const filled = await resolveAssociationLookupFill(
+          api,
+          dataSourceKey,
+          current,
+          lookup,
+          record,
+          enhancedColumns,
+          belongsToIndexes,
+        );
+        updates.push({ rowIndex: cell.rowIndex, column: cell.column, record, filled });
       }
       if (cancelled) return;
       setRows((prev) => {
         const next = [...prev];
         for (const update of updates) {
-          const current = next[update.rowIndex];
-          const lookup = update.column.lookup;
-          if (!current || !lookup) continue;
-          const filled = wrapAssociationLookupFill(current, lookup, update.record, enhancedColumns, belongsToIndexes);
-          next[update.rowIndex] = { ...filled, [update.column.dataIndex]: update.record };
+          if (!next[update.rowIndex]) continue;
+          next[update.rowIndex] = { ...update.filled, [update.column.dataIndex]: update.record };
         }
         return next;
       });

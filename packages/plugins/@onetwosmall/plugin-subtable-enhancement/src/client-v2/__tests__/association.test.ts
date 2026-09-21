@@ -15,19 +15,29 @@ import {
   fetchAssociationRecordById,
   getAssociationColumnMeta,
   isBelongsToAssociationColumn,
+  resolveAssociationLookupFill,
   resolveAssociationRecordsByText,
+  resolveAssociationTargetRecord,
   toAssociationCellValue,
   wrapAssociationLookupFill,
 } from '../utils/association';
 import { applyPasteMatrix, convertCellValue } from '../utils/paste';
 import { createRow, type EnhancedColumnConfig } from '../utils/types';
 
+const targetCollectionFields: Record<string, any> = {
+  name: { name: 'name', interface: 'input', type: 'string' },
+  id: { name: 'id', interface: 'integer', type: 'bigInt' },
+  code: { name: 'code', interface: 'input', type: 'string' },
+};
 const m2oField: any = {
   interface: 'm2o',
   type: 'belongsTo',
   target: 'categories',
   targetCollectionTitleFieldName: 'name',
-  targetCollection: { filterTargetKey: 'id' },
+  targetCollection: {
+    filterTargetKey: 'id',
+    getField: (name: string) => targetCollectionFields[name],
+  },
   collection: { dataSourceKey: 'main' },
 };
 const m2oColumn: EnhancedColumnConfig = { dataIndex: 'category', field: m2oField };
@@ -124,6 +134,112 @@ describe('toAssociationCellValue / wrapAssociationLookupFill (关联列回填包
     const record = { material_code: 'M-001', categoryId: 9, name: '螺栓' };
     const filled = wrapAssociationLookupFill(row, lookup, record, [m2oColumn, textColumn], indexes);
     expect(filled.category).toEqual({ id: 9 });
+    expect(filled.note).toBe('螺栓');
+  });
+});
+
+describe('resolveAssociationTargetRecord (关联目标列标量解析)', () => {
+  it('matches the text title field with a string value', async () => {
+    const api = {
+      request: vi.fn().mockResolvedValue({ data: { data: [{ id: 1, name: '分类A' }], meta: {} } }),
+    };
+    const record = await resolveAssociationTargetRecord(api, 'main', m2oField, '分类A');
+    expect(record).toEqual({ id: 1, name: '分类A' });
+    expect(api.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: 'categories:list',
+        params: expect.objectContaining({
+          page: 1,
+          pageSize: 1,
+          filter: JSON.stringify({ name: '分类A' }),
+        }),
+      }),
+    );
+  });
+
+  it('matches a numeric value against both the text title and the bigint key with correct types', async () => {
+    const api = {
+      request: vi.fn().mockResolvedValue({ data: { data: [{ id: 9, name: '分类9' }], meta: {} } }),
+    };
+    await resolveAssociationTargetRecord(api, 'main', m2oField, 9);
+    expect(api.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          filter: JSON.stringify({ $or: [{ name: '9' }, { id: 9 }] }),
+        }),
+      }),
+    );
+  });
+
+  it('skips numeric fields for non-numeric values (no bigint type error)', async () => {
+    const api = { request: vi.fn().mockResolvedValue({ data: { data: [], meta: {} } }) };
+    await resolveAssociationTargetRecord(api, 'main', m2oField, 'KG');
+    expect(api.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({ filter: JSON.stringify({ name: 'KG' }) }),
+      }),
+    );
+  });
+
+  it('supports a non-primary-key association key', async () => {
+    const field = { ...m2oField, targetKey: 'code', targetCollectionTitleFieldName: undefined };
+    const api = {
+      request: vi.fn().mockResolvedValue({ data: { data: [{ id: 3, code: 'KG' }], meta: {} } }),
+    };
+    const record = await resolveAssociationTargetRecord(api, 'main', field, 'KG');
+    expect(record).toEqual({ id: 3, code: 'KG' });
+    expect(api.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({ filter: JSON.stringify({ code: 'KG' }) }),
+      }),
+    );
+  });
+
+  it('returns null without querying for objects, empty values or missing api/target', async () => {
+    const api = { request: vi.fn() };
+    expect(await resolveAssociationTargetRecord(api, 'main', m2oField, { id: 1 })).toBeNull();
+    expect(await resolveAssociationTargetRecord(api, 'main', m2oField, null)).toBeNull();
+    expect(await resolveAssociationTargetRecord(undefined, 'main', m2oField, 'x')).toBeNull();
+    expect(await resolveAssociationTargetRecord(api, 'main', { interface: 'm2o' }, 'x')).toBeNull();
+    expect(api.request).not.toHaveBeenCalled();
+  });
+
+  it('returns null when nothing matches', async () => {
+    const api = { request: vi.fn().mockResolvedValue({ data: { data: [], meta: {} } }) };
+    expect(await resolveAssociationTargetRecord(api, 'main', m2oField, 'NOPE')).toBeNull();
+  });
+});
+
+describe('resolveAssociationLookupFill (关联目标列回填解析)', () => {
+  const textColumn: EnhancedColumnConfig = { dataIndex: 'note', field: { interface: 'input' } };
+  const lookup = {
+    targetCollection: 'materials',
+    targetField: 'material_code',
+    mappings: [
+      { sourceField: 'categoryId', targetColumn: 'category' },
+      { sourceField: 'name', targetColumn: 'note' },
+    ],
+  };
+  const columns = [m2oColumn, textColumn];
+  const indexes = collectBelongsToColumnIndexes(columns);
+
+  it('replaces the scalar with the resolved record and keeps scalar mappings', async () => {
+    const api = {
+      request: vi.fn().mockResolvedValue({ data: { data: [{ id: 9, name: '分类A' }], meta: {} } }),
+    };
+    const row = { material_code: 'M-001' };
+    const record = { material_code: 'M-001', categoryId: 9, name: '螺栓' };
+    const filled = await resolveAssociationLookupFill(api, 'main', row, lookup, record, columns, indexes);
+    expect(filled.category).toEqual({ id: 9, name: '分类A' });
+    expect(filled.note).toBe('螺栓');
+  });
+
+  it('keeps the original scalar when the association record is not found', async () => {
+    const api = { request: vi.fn().mockResolvedValue({ data: { data: [], meta: {} } }) };
+    const row = { material_code: 'M-001' };
+    const record = { material_code: 'M-001', categoryId: 9, name: '螺栓' };
+    const filled = await resolveAssociationLookupFill(api, 'main', row, lookup, record, columns, indexes);
+    expect(filled.category).toBe(9);
     expect(filled.note).toBe('螺栓');
   });
 });

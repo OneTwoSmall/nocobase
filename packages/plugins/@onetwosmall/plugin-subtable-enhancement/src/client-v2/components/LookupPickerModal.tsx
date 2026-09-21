@@ -10,12 +10,30 @@
 import { SearchOutlined } from '@ant-design/icons';
 import { Button, Input, Modal, Spin, Table } from 'antd';
 import { useFlowEngine } from '@nocobase/flow-engine';
+import { get } from 'lodash';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { useT } from '../locale';
 import { getFieldTitleMap } from '../utils/fieldMeta';
-import { requestList } from '../utils/lookup';
+import { collectLookupRecordAppends, requestList } from '../utils/lookup';
 import type { LookupConfig } from '../utils/types';
+
+/** 单元格取值展示：空值占位；关联记录对象取标题类字段；其它直接字符串化。 */
+function formatCellValue(value: any): string {
+  if (value == null || value === '') return '-';
+  if (typeof value === 'object') {
+    for (const key of ['name', 'title', 'label']) {
+      const candidate = (value as any)[key];
+      if (typeof candidate === 'string' && candidate) return candidate;
+    }
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return '-';
+    }
+  }
+  return String(value);
+}
 
 export interface LookupPickerModalProps {
   open: boolean;
@@ -61,9 +79,11 @@ export function LookupPickerModal({
         const filter = search.trim()
           ? { $or: searchFields.filter(Boolean).map((field) => ({ [field]: { $includes: search.trim() } })) }
           : undefined;
+        const appends = collectLookupRecordAppends(config);
         const { items, meta } = await requestList(api, dataSourceKey, config.targetCollection, {
           page,
           pageSize: 10,
+          ...(appends.length ? { appends } : {}),
           ...(filter ? { filter: JSON.stringify(filter) } : {}),
         });
         setData(items);
@@ -97,7 +117,8 @@ export function LookupPickerModal({
       dataIndex: name,
       width: 160,
       ellipsis: true,
-      render: (value: any) => (value == null || value === '' ? '-' : String(value)),
+      // 关联/嵌套字段（如 primary_unit.unit_name）用 get 按路径取值，rc-table 不解析字符串 dataIndex 的点路径
+      render: (_value: any, record: any) => formatCellValue(get(record, name)),
     }));
   }, [config, fieldTitles, resolvedTitles]);
 

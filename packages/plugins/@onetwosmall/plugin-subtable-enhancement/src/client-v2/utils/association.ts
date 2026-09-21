@@ -7,8 +7,35 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
+import { isNumericField } from './columnIdentity';
 import { applyLookupFill, requestList, resolveRecordsByFields } from './lookup';
 import type { EnhancedColumnConfig, LookupConfig } from './types';
+
+/** 目标集合中数值类型的字段 type（DB 类型），用于判断匹配字段是否数值字段。 */
+const NUMERIC_FIELD_TYPES = new Set([
+  'bigInt',
+  'bigint',
+  'integer',
+  'int',
+  'float',
+  'double',
+  'decimal',
+  'real',
+  'number',
+  'percent',
+]);
+
+/**
+ * 判断目标集合字段是否数值字段：优先看 interface，其次看 type。
+ * 返回 null 表示元数据缺失、无法判断（调用方按值兜底）。
+ */
+function isNumericTargetField(targetField: any): boolean | null {
+  if (!targetField) return null;
+  const iface = typeof targetField.interface === 'string' ? targetField.interface : '';
+  const type = typeof targetField.type === 'string' ? targetField.type : '';
+  if (!iface && !type) return null;
+  return isNumericField(iface) || NUMERIC_FIELD_TYPES.has(type);
+}
 
 /**
  * 子表格列中可按“目标记录对象”写入的关联类型：belongsTo（m2o/obo）单值列。
@@ -120,6 +147,94 @@ export function wrapAssociationLookupFill(
     if (!column) continue;
     const value = next[mapping.targetColumn];
     next[mapping.targetColumn] = toAssociationCellValue(column.field, value);
+  }
+  return next;
+}
+
+/**
+ * 把标量源值解析为关联目标记录：按关联的标题字段与关联键（targetKey，可能是非主键的唯一字段）
+ * 组合成一次查询匹配。为避免 `character varying = bigint` / `invalid input syntax for type bigint`
+ * 之类的类型错误，按字段类型给出正确类型的值：
+ * - 文本字段：传 String(value)；
+ * - 数值字段：仅当值可解析为数字时才参与，传数字；
+ * - 元数据缺失：按值兜底（数字值传数字，否则传字符串）。
+ * 用于回填到 belongsTo 关联列时，避免把文本当作 bigint 主键去查。
+ */
+export async function resolveAssociationTargetRecord(
+  api: any,
+  dataSourceKey: string | undefined,
+  field: any,
+  value: any,
+): Promise<any | null> {
+  if (!api || value == null || typeof value === 'object') return null;
+  const targetCollection = field?.target;
+  if (!targetCollection) return null;
+  const matchFields = [field?.targetCollectionTitleFieldName, resolveSingleTargetKey(field)]
+    .filter((name): name is string => typeof name === 'string' && !!name)
+    .filter((name, index, list) => list.indexOf(name) === index);
+  if (!matchFields.length) return null;
+
+  const targetCollectionObj = field?.targetCollection;
+  const valueText = String(value);
+  const valueIsNumeric = isNumericToken(valueText);
+  const numericValue = valueIsNumeric ? Number(valueText) : undefined;
+
+  const conditions: Array<Record<string, any>> = [];
+  for (const name of matchFields) {
+    const numeric = isNumericTargetField(targetCollectionObj?.getField?.(name));
+    if (numeric === true) {
+      // 数值字段：非数字值直接跳过，避免 bigint 类型错误
+      if (!valueIsNumeric) continue;
+      conditions.push({ [name]: numericValue });
+    } else if (numeric === false) {
+      // 文本字段：一律传字符串，避免 varchar 与 bigint 比较
+      conditions.push({ [name]: valueText });
+    } else {
+      // 元数据缺失：按值兜底
+      conditions.push({ [name]: valueIsNumeric ? numericValue : valueText });
+    }
+  }
+  if (!conditions.length) return null;
+  const filter = conditions.length > 1 ? { $or: conditions } : conditions[0];
+
+  const dataSource = field?.collection?.dataSourceKey || field?.dataSourceKey || dataSourceKey;
+  try {
+    const { items } = await requestList(api, dataSource, targetCollection, {
+      page: 1,
+      pageSize: 1,
+      filter: JSON.stringify(filter),
+    });
+    return items.length ? items[0] : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 查找回填（异步）：先按映射写入源值，再把落到 belongsTo 关联列上的标量源值解析为目标记录，
+ * 写入完整记录对象；未命中时保留原标量（不当作主键包装，避免 bigint 查询报错）。
+ */
+export async function resolveAssociationLookupFill(
+  api: any,
+  dataSourceKey: string | undefined,
+  row: Record<string, any>,
+  lookup: LookupConfig,
+  record: any,
+  columns: EnhancedColumnConfig[],
+  associationIndexes: Set<string>,
+): Promise<Record<string, any>> {
+  let next = applyLookupFill(row, lookup, record);
+  const associationMappings = (lookup.mappings || []).filter(
+    (mapping) => mapping?.targetColumn && associationIndexes.has(mapping.targetColumn),
+  );
+  for (const mapping of associationMappings) {
+    const value = next[mapping.targetColumn];
+    if (value == null || typeof value === 'object') continue;
+    const column = columns.find((c) => c.dataIndex === mapping.targetColumn);
+    const resolved = await resolveAssociationTargetRecord(api, dataSourceKey, column?.field, value);
+    if (resolved) {
+      next = { ...next, [mapping.targetColumn]: resolved };
+    }
   }
   return next;
 }
