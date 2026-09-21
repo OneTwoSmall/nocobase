@@ -208,6 +208,9 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
   const rowsRef = useRef(rows);
   const pickerStateRef = useRef(pickerState);
   const lastWrittenRef = useRef('[]');
+  // 首次挂载（含公式首次重算）视为程序化初始化，不回写表单，避免把子表格字段标记为“用户已修改”
+  const didInitWriteRef = useRef(false);
+  const didInitFormulaRef = useRef(false);
   const pendingLookupsRef = useRef<PasteTarget[]>([]);
   // 粘贴预解析结果：dataIndex → (文本 → 目标记录)；未命中的文本以 undefined 值占位，
   // 让 runLookupTasks 直接判定失败而无需再发请求
@@ -252,6 +255,13 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
   useEffect(() => {
     const projected = rows.map(stripGhostKey);
     const key = JSON.stringify(projected);
+    if (!didInitWriteRef.current) {
+      // 首次挂载：只记录初始值，不回写表单。回写会经 antd 的 updateValue 触发 onValuesChange，
+      // 进而被 FormBlockModel 标记为“用户已修改”，导致未编辑也提示“未保存修改”。
+      didInitWriteRef.current = true;
+      lastWrittenRef.current = key;
+      return;
+    }
     if (key !== lastWrittenRef.current) {
       lastWrittenRef.current = key;
       onChange?.(projected);
@@ -321,9 +331,16 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
   // 公式即时计算
   useEffect(() => {
     if (!enhancedColumns.some((column) => column.formula)) return;
+    const isFirstRun = !didInitFormulaRef.current;
+    didInitFormulaRef.current = true;
     setRows((prev) => {
       const result = recalcFormulas(prev, enhancedColumns);
-      return result.changed ? result.rows : prev;
+      if (!result.changed) return prev;
+      if (isFirstRun) {
+        // 首次重算视为程序化初始化：同步基准值，避免随后的回写触发“用户已修改”标记
+        lastWrittenRef.current = JSON.stringify(result.rows.map(stripGhostKey));
+      }
+      return result.rows;
     });
   }, [enhancedColumns, rows]);
 
