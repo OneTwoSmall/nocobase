@@ -220,16 +220,20 @@ export function EnhancedSubTableField(props: EnhancedSubTableFieldProps) {
   const assocPendingRef = useRef(false);
   const assocLastSigRef = useRef<Map<string, string>>(new Map());
   const assocPasteFilledRef = useRef<Set<string>>(new Set());
-  // 字段禁用前各列自身的 disabled，字段恢复时用于还原（列自身禁用仍生效）
-  const ownColumnDisabledRef = useRef<WeakMap<object, boolean>>(new WeakMap());
+  // 列集合标识：字段禁用期间若增删列，需要为新列补做禁用透传
+  const columnsKey = useMemo(
+    () => (columns ?? []).map((column: any) => column?.dataIndex ?? column?.key ?? '').join('|'),
+    [columns],
+  );
 
-  // 字段级 disabled 透传到列模型：禁用时所有单元格不可编辑；恢复后还原列自身禁用
+  // 字段级 disabled 透传到列模型：禁用时所有单元格不可编辑；恢复后还原列自身禁用。
+  // 快照保存在模块级 WeakMap（见 syncColumnDisabled），因此组件重新挂载后仍能正确还原。
   useEffect(() => {
     const model = props.model;
     if (!model?.mapSubModels) return;
-    const columns = model.mapSubModels('columns', (column: any) => column) ?? [];
-    syncColumnDisabled(columns, !!disabled, ownColumnDisabledRef.current);
-  }, [props.model, disabled]);
+    const columnModels = model.mapSubModels('columns', (column: any) => column) ?? [];
+    syncColumnDisabled(columnModels, !!disabled);
+  }, [props.model, disabled, columnsKey]);
 
   useEffect(() => {
     enhancedColumnsRef.current = enhancedColumns;

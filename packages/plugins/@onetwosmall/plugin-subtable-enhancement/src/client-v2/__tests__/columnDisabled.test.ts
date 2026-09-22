@@ -25,9 +25,8 @@ describe('syncColumnDisabled', () => {
   it('forces all columns disabled when the block is disabled', () => {
     const a = createColumn();
     const b = createColumn(true);
-    const map = new WeakMap<object, boolean>();
 
-    syncColumnDisabled([a, b], true, map);
+    syncColumnDisabled([a, b], true);
 
     expect(a.props.disabled).toBe(true);
     expect(b.props.disabled).toBe(true);
@@ -39,13 +38,12 @@ describe('syncColumnDisabled', () => {
   it('restores each column own disabled after the block is enabled', () => {
     const a = createColumn();
     const b = createColumn(true);
-    const map = new WeakMap<object, boolean>();
 
-    syncColumnDisabled([a, b], true, map);
+    syncColumnDisabled([a, b], true);
     expect(a.props.disabled).toBe(true);
     expect(b.props.disabled).toBe(true);
 
-    syncColumnDisabled([a, b], false, map);
+    syncColumnDisabled([a, b], false);
 
     // a 自身原本可编辑 → 还原为 false；b 自身原本禁用 → 保持 true
     expect(a.props.disabled).toBe(false);
@@ -55,18 +53,32 @@ describe('syncColumnDisabled', () => {
     expect(b.setProps).toHaveBeenCalledTimes(0);
   });
 
+  it('still restores the original state after a component remount while disabled', () => {
+    const column = createColumn();
+
+    // 字段禁用：快照记录列自身可编辑
+    syncColumnDisabled([column], true);
+    expect(column.props.disabled).toBe(true);
+
+    // 组件在禁用期间重新挂载：再次透传不应把“被强制禁用”误记成列自身禁用
+    syncColumnDisabled([column], true);
+    expect(column.props.disabled).toBe(true);
+
+    // 字段恢复：必须还原为可编辑
+    syncColumnDisabled([column], false);
+    expect(column.props.disabled).toBe(false);
+    expect(column.setProps).toHaveBeenLastCalledWith({ disabled: false });
+  });
+
   it('does nothing when the block stays enabled', () => {
     const a = createColumn();
-    const map = new WeakMap<object, boolean>();
 
-    syncColumnDisabled([a], false, map);
+    syncColumnDisabled([a], false);
 
     expect(a.setProps).not.toHaveBeenCalled();
-    expect(map.has(a)).toBe(false);
   });
 
   it('ignores empty column slots', () => {
-    const map = new WeakMap<object, boolean>();
-    expect(() => syncColumnDisabled([null, undefined], true, map)).not.toThrow();
+    expect(() => syncColumnDisabled([null, undefined], true)).not.toThrow();
   });
 });
