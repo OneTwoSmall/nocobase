@@ -165,7 +165,7 @@ export function LookupPickerModal({
           width: columnWidths[path],
           minWidth,
           'data-col-key': path,
-          onResize: (width: number) => handleColumnResize(path, width),
+          onResizeColumn: (width: number) => handleColumnResize(path, width),
         }),
         // 关联字段已解析为标题字段路径；rc-table 不解析点路径，这里用 get 取值
         render: (_value: any, record: any) => formatPickerCellValue(get(record, resolved.displayPath)),

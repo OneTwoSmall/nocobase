@@ -15,8 +15,8 @@ export interface ResizableHeaderCellProps extends React.ThHTMLAttributes<HTMLTab
   width?: number;
   /** 列最小宽度：自适应布局下保证表头标题完整显示，同时作为拖拽下限。 */
   minWidth?: number;
-  /** 拖拽结束时回调新列宽。 */
-  onResize?: (width: number) => void;
+  /** 拖拽时回调新列宽（避免与 React 原生的 onResize 事件冲突）。 */
+  onResizeColumn?: (width: number) => void;
   'data-col-key'?: string;
 }
 
@@ -63,7 +63,7 @@ const cellClassName = css`
  * 可拖拽调整列宽的表头单元格。列宽只在弹窗会话内维护（不持久化，刷新即失效）。
  * 未拖拽时 `width` 为 undefined，表格走自适应布局；首次拖拽后由弹窗冻结全部列宽。
  */
-export function ResizableHeaderCell({ width, minWidth, onResize, children, ...rest }: ResizableHeaderCellProps) {
+export function ResizableHeaderCell({ width, minWidth, onResizeColumn, children, ...rest }: ResizableHeaderCellProps) {
   const startXRef = useRef(0);
   const startWidthRef = useRef(0);
   const rafRef = useRef<number | null>(null);
@@ -71,7 +71,7 @@ export function ResizableHeaderCell({ width, minWidth, onResize, children, ...re
 
   const handlePointerDown = useCallback(
     (event: React.PointerEvent<HTMLSpanElement>) => {
-      if (!onResize) return;
+      if (!onResizeColumn) return;
       event.preventDefault();
       event.stopPropagation();
 
@@ -83,7 +83,7 @@ export function ResizableHeaderCell({ width, minWidth, onResize, children, ...re
         if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
         rafRef.current = requestAnimationFrame(() => {
           const delta = moveEvent.clientX - startXRef.current;
-          onResize(Math.max(floor, Math.round(startWidthRef.current + delta)));
+          onResizeColumn(Math.max(floor, Math.round(startWidthRef.current + delta)));
         });
       };
       const handleUp = () => {
@@ -98,7 +98,7 @@ export function ResizableHeaderCell({ width, minWidth, onResize, children, ...re
       document.addEventListener('pointermove', handleMove);
       document.addEventListener('pointerup', handleUp);
     },
-    [floor, onResize, width],
+    [floor, onResizeColumn, width],
   );
 
   return (
@@ -108,7 +108,7 @@ export function ResizableHeaderCell({ width, minWidth, onResize, children, ...re
       style={{ ...rest.style, minWidth: minWidth || undefined }}
     >
       {children}
-      {onResize && (
+      {onResizeColumn && (
         <span
           role="separator"
           aria-orientation="vertical"
