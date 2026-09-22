@@ -19,6 +19,11 @@ export interface LookupConfig {
   targetField: string;
   mappings: LookupMapping[];
   searchFields?: string[];
+  /**
+   * 选择弹窗要显示的列（字段路径，支持关联嵌套路径，如 `primary_unit.unit_name`）。
+   * 未配置时回退为「匹配字段 + 回填来源字段」。关联字段默认展示目标表标题字段。
+   */
+  displayFields?: string[];
 }
 
 export interface EnhancedColumnConfig {

@@ -161,6 +161,17 @@ describe('collectLookupRecordAppends & appends forwarding', () => {
   it('returns only the target field when there are no mappings/search fields', () => {
     expect(collectLookupRecordAppends({ targetCollection: 't', targetField: 'code', mappings: [] })).toEqual(['code']);
   });
+
+  it('includes configured display fields in appends', () => {
+    expect(
+      collectLookupRecordAppends({
+        targetCollection: 't',
+        targetField: 'code',
+        mappings: [],
+        displayFields: ['name', 'primary_unit.unit_name'],
+      }),
+    ).toEqual(['code', 'name', 'primary_unit']);
+  });
 });
 
 describe('resolveRecordsByFields error isolation', () => {

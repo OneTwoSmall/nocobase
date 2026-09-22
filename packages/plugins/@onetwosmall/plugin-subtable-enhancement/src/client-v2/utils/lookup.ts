@@ -78,12 +78,13 @@ export function buildAppendFields(fields: Array<string | undefined | null>): str
   return result;
 }
 
-/** 从查找回填配置收集所需的 append 字段：匹配字段、搜索字段与所有映射来源字段。 */
+/** 从查找回填配置收集所需的 append 字段：匹配字段、搜索字段、展示字段与所有映射来源字段。 */
 export function collectLookupRecordAppends(config: LookupConfig | undefined): string[] {
   if (!config) return [];
   return buildAppendFields([
     config.targetField,
     ...(config.searchFields || []),
+    ...(config.displayFields || []),
     ...(config.mappings || []).map((mapping) => mapping?.sourceField),
   ]);
 }

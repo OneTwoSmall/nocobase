@@ -14,3 +14,4 @@ export * from './EnhancedSubTableField';
 export * from './FormulaEditor';
 export * from './LookupMappingEditor';
 export * from './LookupPickerModal';
+export * from './ResizableHeaderCell';

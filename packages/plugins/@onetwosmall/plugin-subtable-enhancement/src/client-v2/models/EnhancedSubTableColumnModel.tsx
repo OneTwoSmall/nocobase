@@ -158,6 +158,7 @@ EnhancedSubTableColumnModel.registerFlow({
               targetField: existing.targetField || '',
               mappings: Array.isArray(existing.mappings) ? existing.mappings : [],
               searchFields: Array.isArray(existing.searchFields) ? existing.searchFields : [],
+              displayFields: Array.isArray(existing.displayFields) ? existing.displayFields : undefined,
             },
           };
         }
@@ -187,6 +188,7 @@ EnhancedSubTableColumnModel.registerFlow({
                 targetField: raw.targetField || '',
                 mappings: Array.isArray(raw.mappings) ? raw.mappings : [],
                 searchFields: Array.isArray(raw.searchFields) ? raw.searchFields : [],
+                displayFields: Array.isArray(raw.displayFields) ? raw.displayFields : undefined,
               }
             : undefined;
         ctx.model.setProps({ lookup });

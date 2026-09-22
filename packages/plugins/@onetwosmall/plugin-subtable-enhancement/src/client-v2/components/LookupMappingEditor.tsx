@@ -40,6 +40,7 @@ function normalizeConfig(cfg?: LookupConfig | null): LookupConfig {
       ? cfg.mappings.filter((mapping) => mapping && typeof mapping === 'object')
       : [],
     searchFields: Array.isArray(cfg?.searchFields) ? cfg.searchFields.filter(Boolean) : [],
+    displayFields: Array.isArray(cfg?.displayFields) ? cfg.displayFields.filter(Boolean) : undefined,
   };
 }
 
@@ -78,6 +79,13 @@ export function LookupMappingEditor({ value, onChange, dataSourceKey, collection
     return getFieldOptions(collection);
   }, [collectionName, dataSourceKey, flowEngine]);
 
+  // 弹窗默认展示「匹配字段 + 回填来源字段」；用户配置后以其为准
+  const derivedDisplayFields = useMemo(() => {
+    const list = [config.targetField, ...config.mappings.map((mapping) => mapping.sourceField)];
+    return list.filter((name, index, arr) => !!name && arr.indexOf(name) === index);
+  }, [config.targetField, config.mappings]);
+  const effectiveDisplayFields = config.displayFields?.length ? config.displayFields : derivedDisplayFields;
+
   const update = (patch: Partial<LookupConfig>) => {
     onChange?.({ ...config, ...patch });
   };
@@ -104,7 +112,9 @@ export function LookupMappingEditor({ value, onChange, dataSourceKey, collection
           value={config.targetCollection || undefined}
           placeholder={t('Target collection')}
           options={collectionOptions}
-          onChange={(targetCollection) => update({ targetCollection, targetField: '', mappings: [], searchFields: [] })}
+          onChange={(targetCollection) =>
+            update({ targetCollection, targetField: '', mappings: [], searchFields: [], displayFields: [] })
+          }
           allowClear
         />
       </Space>
@@ -118,6 +128,18 @@ export function LookupMappingEditor({ value, onChange, dataSourceKey, collection
               placeholder={t('Match field')}
               options={targetFieldOptions}
               onChange={(targetField) => update({ targetField, searchFields: [targetField] })}
+              allowClear
+            />
+          </Space>
+          <Space align="start">
+            <Typography.Text style={{ width: 80, display: 'inline-block' }}>{t('Display fields')}</Typography.Text>
+            <Select
+              mode="multiple"
+              style={{ minWidth: 260 }}
+              value={effectiveDisplayFields}
+              placeholder={t('Display fields')}
+              options={targetFieldOptions}
+              onChange={(displayFields) => update({ displayFields })}
               allowClear
             />
           </Space>
