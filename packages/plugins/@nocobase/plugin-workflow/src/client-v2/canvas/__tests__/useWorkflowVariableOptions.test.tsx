@@ -31,6 +31,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const holder = vi.hoisted(() => ({
   engine: null as any,
   currentNode: null as any,
+  canvasWorkflow: null as any,
   workflow: null as any,
   variableSourceWorkflow: null as any,
 }));
@@ -51,11 +52,14 @@ vi.mock('../contexts', async (importOriginal) => {
     ...actual,
     useNodeContext: () => holder.currentNode,
     useCurrentWorkflowContext: () => holder.workflow,
+    useFlowContext: () => ({ workflow: holder.canvasWorkflow }),
     useWorkflowVariableSourceContext: () => holder.variableSourceWorkflow,
   };
 });
 
 import { useWorkflowVariableOptions } from '../useWorkflowVariableOptions';
+import LoopInstruction from '../../../../../plugin-workflow-loop/src/client-v2/nodes/loop';
+import { loadMetaTreeChildren, type MetaTreeNode } from '@nocobase/flow-engine';
 
 /**
  * Build a v1-shaped plugin: `instructions` + `systemVariables` + `triggers`
@@ -120,13 +124,16 @@ function makeV1ShapedPlugin() {
   };
 }
 
-function setupEngine(plugin: any, { propertyTree = [] as any[] } = {}) {
+function setupEngine(plugin: any, options: { packagePlugin?: any; propertyTree?: any[] } = {}) {
+  const { packagePlugin, propertyTree = [] } = options;
   holder.engine = {
     context: {
       t: (key: string) => key,
       getPropertyMetaTree: () => propertyTree,
       app: {
-        pm: { get: (name: string) => (name === 'workflow' ? plugin : undefined) },
+        pm: {
+          get: (name: string) => (name === 'workflow' ? plugin : packagePlugin),
+        },
       },
     },
   };
@@ -135,6 +142,7 @@ function setupEngine(plugin: any, { propertyTree = [] as any[] } = {}) {
 describe('useWorkflowVariableOptions — runtime-neutral resolution', () => {
   beforeEach(() => {
     holder.workflow = null;
+    holder.canvasWorkflow = null;
     holder.variableSourceWorkflow = null;
   });
 
@@ -171,6 +179,44 @@ describe('useWorkflowVariableOptions — runtime-neutral resolution', () => {
     expect(trigger).toBeTruthy();
     // The trigger's `data` output sits under $context, its fields beneath.
     expect(trigger?.children?.map((c: any) => c.name)).toContain('data');
+  });
+
+  it('uses the package workflow plugin when the neutral alias does not contain the current trigger', () => {
+    const aliasPlugin = makeV1ShapedPlugin();
+    const packagePlugin = makeV1ShapedPlugin();
+    packagePlugin.triggers.get = (type: string) =>
+      type === 'approval'
+        ? {
+            useVariables: () => [
+              {
+                value: 'applicant',
+                label: 'Applicant',
+                children: [{ value: 'id', label: 'ID' }],
+              },
+            ],
+          }
+        : undefined;
+    setupEngine(aliasPlugin, { packagePlugin });
+    holder.currentNode = { key: 'n1', type: 'approval', upstream: null };
+    holder.workflow = { id: 7, type: 'approval', config: { collection: 'posts' } };
+
+    const { result } = renderHook(() => useWorkflowVariableOptions());
+    const trigger = result.current.find((node) => node.name === '$context');
+    const applicant = trigger?.children?.find((node: any) => node.name === 'applicant');
+
+    expect(applicant?.children?.map((node: any) => node.name)).toContain('id');
+  });
+
+  it('uses the canvas workflow when the detached current-workflow context has its empty default', () => {
+    setupEngine(makeV1ShapedPlugin());
+    holder.currentNode = { key: 'n1', type: 'condition', upstream: null };
+    holder.workflow = {};
+    holder.canvasWorkflow = { id: 7, type: 'collection', config: { collection: 'posts' } };
+
+    const { result } = renderHook(() => useWorkflowVariableOptions());
+    const trigger = result.current.find((node) => node.name === '$context');
+
+    expect(trigger?.children?.map((node: any) => node.name)).toContain('data');
   });
 
   it('uses the variable source workflow override for trigger variables', () => {
@@ -276,6 +322,66 @@ describe('useWorkflowVariableOptions — runtime-neutral resolution', () => {
     expect(scopes).toBeTruthy();
     expect(scopes?.children?.map((child: any) => child.name)).toEqual(['loop1']);
     expect(scopes?.children?.[0]?.children?.map((child: any) => child.name)).toEqual(['item']);
+  });
+
+  it.each([false, true])('resolves nested loop item fields (lazy: %s)', async (lazy) => {
+    const plugin = makeV1ShapedPlugin();
+    const loop = new LoopInstruction();
+    const originalGet = plugin.instructions.get;
+    plugin.instructions.get = (type: string) => (type === 'loop' ? loop : originalGet(type));
+    const fields = [{ value: 'title', label: 'Title' }];
+    plugin.triggers.get = () => ({
+      useVariables: () => [
+        {
+          value: 'data',
+          label: 'Data',
+          children: [
+            {
+              value: 'posts',
+              label: 'Posts',
+              ...(lazy
+                ? {
+                    loadChildren: (option: { children?: typeof fields }) => {
+                      option.children = fields;
+                    },
+                  }
+                : { children: fields }),
+            },
+          ],
+        },
+      ],
+    });
+    setupEngine(plugin);
+    holder.workflow = { id: 7, type: 'collection', config: {} };
+    const outer = { id: 1, key: 'outer', type: 'loop', config: { target: '{{$context.data}}' } };
+    const inner = {
+      id: 2,
+      key: 'inner',
+      type: 'loop',
+      config: { target: '{{$scopes.outer.item.posts}}' },
+      branchIndex: 0,
+      upstream: outer,
+    };
+    holder.currentNode = { key: 'action', type: 'condition', branchIndex: 0, upstream: inner };
+
+    const { result, rerender } = renderHook(() => useWorkflowVariableOptions());
+    async function findPath(path: string[]): Promise<MetaTreeNode | undefined> {
+      let children = result.current;
+      let node: MetaTreeNode | undefined;
+      for (const segment of path) {
+        node = children.find((child) => child.name === segment);
+        children = node ? await loadMetaTreeChildren(node) : [];
+      }
+      return node;
+    }
+
+    const title = await findPath(['$scopes', 'inner', 'item', 'title']);
+    expect(title).toBeDefined();
+    expect(title?.paths).toEqual(['$scopes', 'inner', 'item', 'title']);
+    expect(await findPath(['$scopes', 'outer', 'item', 'posts', 'title'])).toBeDefined();
+    const tree = result.current;
+    rerender();
+    expect(result.current).toBe(tree);
   });
 
   it('keeps disabled scope and node-result roots when they have no available children', () => {
