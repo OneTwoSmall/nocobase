@@ -57,10 +57,12 @@ export const Options = () => {
                   defaultPassword: {
                     type: 'string',
                     title: '{{t("Default Password")}}',
+                    description: '{{t("Leave it empty to generate a random password for each new user")}}',
                     'x-decorator': 'FormItem',
                     'x-component': 'Input',
                     'x-component-props': {
-                      placeholder: 'ABCabc@123',
+                      type: 'password',
+                      autoComplete: 'new-password',
                     },
                   },
                 },

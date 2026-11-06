@@ -9,6 +9,7 @@
 
 import { useFlowContext } from '@nocobase/flow-engine';
 import React, { useEffect, useRef, useState } from 'react';
+import { buildSignedInUrl, readTicket, resolveCallbackTarget } from '../callback-target';
 
 const S = {
   wrap: {
@@ -91,33 +92,22 @@ function Spinner({ stops }: { stops: [string, string] }) {
   );
 }
 
+/**
+ * The browser reaches this page through the SPA (NocoBase answers HTML paths with the client shell before server
+ * middlewares run), so the ticket exchange goes through the `seeyonAuth:callback` API.
+ */
 export default function SeeyonCallbackPage() {
   const ctx = useFlowContext();
   const started = useRef(Date.now());
   const [state, setState] = useState<'loading' | 'ok' | 'err'>('loading');
   const [errMsg, setErrMsg] = useState('');
-  const marker = '/seeyon-auth/callback';
-  const markerIdx = location.pathname.indexOf(marker);
-  const appPrefix = markerIdx > 0 ? location.pathname.substring(0, markerIdx) : '';
-  const customPath =
-    markerIdx !== -1
-      ? (() => {
-          const raw = location.pathname.substring(markerIdx + marker.length).replace(/^\//, '');
-          return /^(?:[a-zA-Z0-9_\-/.]+)?$/.test(raw) ? raw : '';
-        })()
-      : '';
+  const { adminBase, signinBase, customPath } = resolveCallbackTarget(window.location.pathname);
 
   useEffect(() => {
     document.title = '致远OA 单点登录';
-    const search = location.search || '';
-    const ticket =
-      new URLSearchParams(search).get('v5ticket') ||
-      new URLSearchParams(search).get('ticket') ||
-      search.match(/[?&]ticket=([^&]+)/)?.[1] ||
-      search.match(/[?&]v5ticket=([^&]+)/)?.[1] ||
-      (undefined as string | undefined);
+    const ticket = readTicket(window.location.search);
     if (!ticket) {
-      location.replace(`${appPrefix}/v/admin/signin?error=missing_ticket`);
+      window.location.replace(`${signinBase}/signin?error=missing_ticket`);
       return;
     }
 
@@ -129,20 +119,17 @@ export default function SeeyonCallbackPage() {
         if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
         setState('ok');
         await new Promise((resolve) => setTimeout(resolve, 120));
-        const { token } = res.data.data;
-        const target = customPath
-          ? `${appPrefix}/v/admin/${customPath}?token=${encodeURIComponent(token)}`
-          : `${appPrefix}/v/admin/?token=${encodeURIComponent(token)}`;
-        location.replace(target);
+        const { token, authenticator } = res.data.data;
+        window.location.replace(buildSignedInUrl({ adminBase, signinBase, customPath }, token, authenticator));
       })
-      .catch((err: any) => {
+      .catch((err: { data?: { errors?: { message?: string }[] }; message?: string }) => {
         setErrMsg(err?.data?.errors?.[0]?.message || err?.message || 'OA 单点登录验证未通过，请重新尝试');
         setState('err');
       });
-  }, [ctx.api]);
+  }, [ctx.api, adminBase, signinBase, customPath]);
 
-  const retry = () => location.reload();
-  const home = () => location.replace(`${appPrefix}/v/admin/`);
+  const retry = () => window.location.reload();
+  const home = () => window.location.replace(`${adminBase}/`);
 
   if (state === 'err')
     return (
@@ -152,10 +139,10 @@ export default function SeeyonCallbackPage() {
           <div style={S.title}>认证失败</div>
           <div style={{ ...S.sub, marginBottom: 28 }}>{errMsg}</div>
           <div style={S.act}>
-            <button onClick={retry} style={S.btn1}>
+            <button type="button" onClick={retry} style={S.btn1}>
               重新尝试
             </button>
-            <button onClick={home} style={S.btn2}>
+            <button type="button" onClick={home} style={S.btn2}>
               返回首页
             </button>
           </div>

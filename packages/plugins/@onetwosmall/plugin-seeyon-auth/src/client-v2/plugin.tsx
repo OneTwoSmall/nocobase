@@ -11,6 +11,11 @@ import { Plugin } from '@nocobase/client-v2';
 import PluginAuthClientV2 from '@nocobase/plugin-auth/client-v2';
 import { authType } from '../constants';
 
+/**
+ * The browser always lands on the SPA shell first — NocoBase serves the client `index.html` for HTML paths before
+ * server middlewares run — so the callback page has to exist on the client side and exchange the ticket through the
+ * `seeyonAuth:callback` API.
+ */
 export class PluginSeeyonAuthClientV2 extends Plugin {
   async load() {
     const auth = this.app.pm.get(PluginAuthClientV2);

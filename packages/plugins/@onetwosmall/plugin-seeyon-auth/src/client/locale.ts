@@ -8,14 +8,15 @@
  */
 
 import { tExpr as _tExpr, useFlowEngine } from '@nocobase/flow-engine';
+import { namespace } from '../constants';
 
-const NAMESPACE = '@onetwosmall/plugin-seeyon-auth';
-
+// Locale resources under `@onetwosmall/plugin-seeyon-auth` are auto-loaded by the v2 buildin `LocalePlugin.afterAdd`.
 export function useT() {
   const engine = useFlowEngine();
-  return (str: string) => engine.context.t(str, { ns: [NAMESPACE, 'client'] });
+  return (key: string, options?: Record<string, unknown>) =>
+    engine.context.t(key, { ns: [namespace, 'client'], nsMode: 'fallback', ...options });
 }
 
 export function tExpr(key: string) {
-  return _tExpr(key, { ns: [NAMESPACE, 'client'] });
+  return _tExpr(key, { ns: [namespace, 'client'], nsMode: 'fallback' });
 }

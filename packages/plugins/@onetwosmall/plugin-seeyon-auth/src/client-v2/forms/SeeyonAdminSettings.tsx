@@ -9,7 +9,7 @@
 
 import { Form, Input, Switch, Select } from 'antd';
 import React from 'react';
-import { useT } from '../../client/locale';
+import { useT } from '../locale';
 
 export default function SeeyonAdminSettings() {
   const t = useT();
@@ -39,8 +39,12 @@ export default function SeeyonAdminSettings() {
           ]}
         />
       </Form.Item>
-      <Form.Item name={['options', 'public', 'defaultPassword']} label={t('Default Password')}>
-        <Input placeholder="ABCabc@123" />
+      <Form.Item
+        name={['options', 'public', 'defaultPassword']}
+        label={t('Default Password')}
+        extra={t('Leave it empty to generate a random password for each new user')}
+      >
+        <Input.Password autoComplete="new-password" />
       </Form.Item>
     </>
   );

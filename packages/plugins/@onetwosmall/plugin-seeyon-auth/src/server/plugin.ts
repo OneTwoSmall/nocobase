@@ -7,56 +7,101 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
+import { AuthConfig } from '@nocobase/auth';
 import { Plugin } from '@nocobase/server';
-import { authType, namespace } from '../constants';
-import { SeeyonAuth } from './seeyon-auth';
 import { tval } from '@nocobase/utils';
-import { resolvePassword } from './utils';
+import { authType, namespace } from '../constants';
+import { CallbackPageMessages, renderCallbackHTML } from './callback-page';
+import { SeeyonAuth, SeeyonFailureReason } from './seeyon-auth';
+import { buildCallbackRedirect, parseCallbackPath, redactTicket } from './utils';
+
+type AuthenticatorRecord = {
+  name: string;
+  authType: string;
+  enabled?: boolean;
+  options: Record<string, any>;
+};
+
+/** The callback page is a browser navigation surface, not an API endpoint. */
+const CALLBACK_METHODS = new Set(['GET', 'HEAD']);
+const AUTHENTICATOR_CACHE_TTL = 30_000;
+
+/** Minimal shape of the koa context fields used by the callback page (i18n is injected by the i18n middleware). */
+type TrackedContext = { t?: (key: string, options?: Record<string, unknown>) => string };
 
 export class PluginSeeyonAuthServer extends Plugin {
-  private cachedAuthenticator: any = null;
-  private cachedTokenConfig: any = null;
+  private cachedAuthenticator: AuthenticatorRecord | null | undefined = undefined;
+  private cachedAt = 0;
 
   async load() {
-    this.db.on('authenticators.afterSave', () => {
-      this.cachedAuthenticator = null;
-    });
-    this.db.on('authenticators.afterDestroy', () => {
-      this.cachedAuthenticator = null;
-    });
-    this.db.on('tokenControlConfig.afterSave', () => {
-      this.cachedTokenConfig = null;
-    });
+    this.db.on('authenticators.afterSave', () => this.invalidateAuthenticatorCache());
+    this.db.on('authenticators.afterDestroy', () => this.invalidateAuthenticatorCache());
 
     this.app.authManager.registerTypes(authType, {
       auth: SeeyonAuth,
       title: tval('Seeyon OA', { ns: namespace }),
+      // `options.public` is returned verbatim to anonymous visitors by `authenticators:publicList`, and the settings
+      // form stores the auto-registration settings (including the default password) there. Only whitelisted, safe
+      // fields may leak out of this hook.
+      getPublicOptions: (options) => ({
+        autoRegister: Boolean(getOption(options, 'autoRegister')),
+      }),
     });
 
     this.app.use(
       async (ctx, next) => {
         const parsed = parseCallbackPath(ctx.path);
-        if (!parsed) return next();
+        if (!parsed || !CALLBACK_METHODS.has(ctx.method)) return next();
 
-        this.app.logger.info(`[seeyon-auth] callback path=${ctx.path} query=${ctx.request.querystring}`);
-
-        const { appPrefix, isV2, customPath } = parsed;
-        const base = `${appPrefix}${isV2 ? '/v/admin' : '/admin'}`;
-        const rawTicket = (ctx.query.v5ticket || ctx.query.ticket || ctx.query.token) as string | undefined;
-        const v5ticket = typeof rawTicket === 'string' ? rawTicket : undefined;
+        const ticket = getTicket(ctx);
+        this.app.logger.info(`[seeyon-auth] callback path=${ctx.path} ticket=${redactTicket(ticket)}`);
 
         let token: string | null = null;
+        let authenticatorName: string | undefined;
+        let failureReason: CallbackFailureReason | undefined;
 
-        if (v5ticket) {
-          const authenticator = await this.getCachedAuthenticator();
-          if (authenticator) {
-            const result = await this.validateTicketAndLogin(authenticator, v5ticket);
-            if (result) token = result.token;
+        if (ticket) {
+          try {
+            const authenticator = await this.getCachedAuthenticator();
+            if (!authenticator) {
+              failureReason = 'NO_AUTHENTICATOR';
+            } else {
+              const result = await this.createAuth(ctx, authenticator).attemptSignIn(ticket);
+              if (result.status === 'ok') {
+                token = result.token;
+                authenticatorName = authenticator.name;
+              } else {
+                failureReason = result.reason;
+              }
+            }
+          } catch (error) {
+            // This page is the user-facing surface, so an upstream/database failure must render the retry UI instead
+            // of bubbling up as a raw 500.
+            const message = error instanceof Error ? error.message : String(error);
+            this.app.logger.error(`[seeyon-auth] callback failed: ${message}`);
+            token = null;
+            failureReason = 'INTERNAL_ERROR';
           }
+        } else {
+          failureReason = 'MISSING_TICKET';
         }
 
+        this.app.logger.info(`[seeyon-auth] callback result=${token ? 'signed-in' : `failed:${failureReason}`}`);
+
+        const { base, targetUrl } = buildCallbackRedirect({ ...parsed, token, authenticatorName });
+
+        // The callback is a browser page, not an API payload: keep `dataWrapping` from turning the HTML into
+        // `{"data":"<!DOCTYPE html>..."}`, and keep the token out of third-party referrers.
+        ctx.withoutDataWrapping = true;
+        ctx.set('Referrer-Policy', 'no-referrer');
         ctx.type = 'text/html';
-        ctx.body = renderCallbackHTML({ base, customPath, token });
+        const messages = getCallbackMessages(ctx);
+        ctx.body = renderCallbackHTML({
+          messages,
+          targetUrl,
+          homeUrl: `${base}/`,
+          failureDetail: token ? undefined : failureReason && messages.reasons[failureReason],
+        });
       },
       { tag: 'seeyon-auth-callback', after: 'bodyParser', before: 'dataSource' },
     );
@@ -66,29 +111,45 @@ export class PluginSeeyonAuthServer extends Plugin {
       actions: {
         callback: async (ctx, next) => {
           const { v5ticket } = ctx.action.params.values || {};
-          this.app.logger.info(`[seeyon-auth] API callback values=${JSON.stringify(ctx.action.params.values || {})}`);
+          this.app.logger.info(`[seeyon-auth] API callback ticket=${redactTicket(v5ticket)}`);
           if (!v5ticket) {
-            ctx.throw(400, { message: 'ticket or v5ticket is required', code: 'MISSING_TICKET' });
-            return;
+            ctx.throw(400, {
+              message: ctx.t('ticket or v5ticket is required', { ns: namespace }),
+              code: 'MISSING_TICKET',
+            });
           }
+
           const authenticator = await this.getCachedAuthenticator();
           if (!authenticator) {
-            ctx.throw(400, { message: 'Seeyon authenticator not found or disabled', code: 'NO_AUTHENTICATOR' });
-            return;
+            ctx.throw(400, {
+              message: ctx.t('Seeyon authenticator not found or disabled', { ns: namespace }),
+              code: 'NO_AUTHENTICATOR',
+            });
           }
-          const result = await this.validateTicketAndLogin(authenticator, v5ticket);
-          if (!result) {
-            const options = authenticator.options?.public || {};
-            const autoRegister = options.autoRegister;
+
+          const result = await this.createAuth(ctx, authenticator).attemptSignIn(v5ticket);
+          if (result.status === 'failed') {
+            const autoRegister = getOption(authenticator.options, 'autoRegister');
             ctx.throw(401, {
-              message: autoRegister
-                ? 'OA ticket validation failed or user auto-creation error'
-                : 'OA ticket validation failed or user not found (auto-registration disabled)',
+              message:
+                autoRegister && result.reason === 'USER_NOT_FOUND'
+                  ? ctx.t('OA ticket validation failed or user auto-creation error', { ns: namespace })
+                  : ctx.t('OA ticket validation failed or user not found (auto-registration disabled)', {
+                      ns: namespace,
+                    }),
               code: 'AUTH_FAILED',
             });
             return;
           }
-          ctx.body = { token: result.token, user: result.user };
+
+          const { id, username, nickname, email } = result.user.toJSON();
+          ctx.body = {
+            token: result.token,
+            // The client callback page forwards this so the session is bound to the Seeyon authenticator.
+            authenticator: authenticator.name,
+            // Only whitelisted fields: the users collection may grow sensitive columns later.
+            user: { id, username, nickname, email },
+          };
           await next();
         },
       },
@@ -97,180 +158,82 @@ export class PluginSeeyonAuthServer extends Plugin {
     this.app.acl.allow('seeyonAuth', 'callback', 'public');
   }
 
-  async getCachedAuthenticator() {
-    if (this.cachedAuthenticator) return this.cachedAuthenticator;
+  async getCachedAuthenticator(): Promise<AuthenticatorRecord | null> {
+    if (this.cachedAuthenticator !== undefined && Date.now() - this.cachedAt < AUTHENTICATOR_CACHE_TTL) {
+      return this.cachedAuthenticator;
+    }
+
     const repo = this.db.getRepository('authenticators');
-    this.cachedAuthenticator = await repo.findOne({ filter: { authType, enabled: true } });
+    const authenticator = await repo.findOne({ filter: { authType, enabled: true } });
+    // `undefined` means "not looked up yet" while `null` means "looked up and absent", so an instance without a
+    // Seeyon authenticator does not query the database on every callback.
+    this.cachedAuthenticator = (authenticator as unknown as AuthenticatorRecord) || null;
+    this.cachedAt = Date.now();
     return this.cachedAuthenticator;
   }
 
-  async validateTicketAndLogin(authenticator: any, v5ticket: string) {
-    const options = authenticator.options?.public || {};
-    const oaHost = options.oaHost;
-    if (!oaHost) return null;
-    if (!this.cachedTokenConfig) {
-      this.cachedTokenConfig = await this.app.authManager.tokenController.getConfig();
-    }
-    const username = await this.validateOATicket(oaHost, v5ticket);
-    if (!username) return null;
-    const matchField = options.matchField || 'username';
-    const autoRegister = options.autoRegister;
-    const userRepo = this.db.getRepository('users');
-    let user = await userRepo.findOne({ filter: { [matchField]: username } });
-    if (!user && autoRegister) {
-      this.app.logger.info(`[seeyon-auth] auto-registering user: ${username} (${matchField})`);
-      user = await userRepo.create({
-        values: { [matchField]: username, nickname: username, password: resolvePassword(options.defaultPassword) },
-      });
-    }
-    if (!user) {
-      this.app.logger.warn(`[seeyon-auth] user not found: ${username}, autoRegister=${autoRegister}`);
-      return null;
-    }
-    const [_, tokenInfo] = await Promise.all([
-      authenticator.addUser(user, { through: { uuid: username } }).catch(() => {}),
-      this.app.authManager.tokenController.add({ userId: user.id, authenticator: authenticator.name }),
-    ]);
-    const token = this.app.authManager.jwt.sign(
-      { userId: user.id, temp: true, iat: Math.floor(tokenInfo.issuedTime / 1000), signInTime: tokenInfo.signInTime },
-      { jwtid: tokenInfo.jti, expiresIn: Math.floor(this.cachedTokenConfig.tokenExpirationTime / 1000) },
-    );
-    return { token, user };
+  private invalidateAuthenticatorCache() {
+    this.cachedAuthenticator = undefined;
+    this.cachedAt = 0;
   }
 
-  async validateOATicket(oaHost: string, v5ticket: string): Promise<string | null> {
-    const url = `${oaHost}/seeyon/thirdpartyController.do?ticket=${encodeURIComponent(v5ticket)}`;
-    this.app.logger.info(`[seeyon-auth] validating ticket at ${oaHost}`);
-    try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
-      if (!response.ok) {
-        this.app.logger.warn(`[seeyon-auth] OA responded ${response.status}`);
-        return null;
-      }
-      const text = await response.text();
-      if (!text) {
-        this.app.logger.warn(`[seeyon-auth] OA returned empty body`);
-        return null;
-      }
-      if (text.toLowerCase().includes('error')) {
-        this.app.logger.warn(`[seeyon-auth] OA returned error: ${text}`);
-        return null;
-      }
-      this.app.logger.info(`[seeyon-auth] ticket validated, username: ${text.trim()}`);
-      return text.trim();
-    } catch (err: any) {
-      this.app.logger.error(`[seeyon-auth] OA fetch failed: ${err.message || err}`);
-      return null;
-    }
+  /**
+   * The middleware and resource-action contexts are the same runtime object the core auth flow receives, but their koa
+   * typings do not carry the action fields declared by `AuthConfig.ctx`, hence the single narrowing cast here.
+   */
+  private createAuth(ctx: unknown, authenticator: AuthenticatorRecord) {
+    return new SeeyonAuth({ authenticator, options: authenticator.options, ctx: ctx as AuthConfig['ctx'] });
   }
 }
 
 export default PluginSeeyonAuthServer;
 
-function parseCallbackPath(path: string) {
-  const suffixes = ['/v/seeyon-auth/callback', '/seeyon-auth/callback'];
-  for (const suffix of suffixes) {
-    const idx = path.indexOf(suffix);
-    if (idx === -1) continue;
-    const after = path.substring(idx + suffix.length);
-    if (after !== '' && !after.startsWith('/')) continue;
-    let customPath = after.startsWith('/') ? after.substring(1) : after;
-    if (/\.\.(\\|\/)/.test(customPath) || /\.\.$/.test(customPath)) {
-      customPath = '';
-    }
-    return {
-      appPrefix: path.substring(0, idx),
-      isV2: suffix.startsWith('/v/'),
-      customPath,
-    };
-  }
-  return null;
+/**
+ * The ticket may be passed as `v5ticket` (Seeyon native), `ticket` or — for older OA integrations — `token`.
+ * Only the first string value is used, so duplicate query parameters cannot smuggle an array.
+ */
+function getTicket(ctx: { query: Record<string, unknown> }): string | undefined {
+  const raw = ctx.query.v5ticket ?? ctx.query.ticket ?? ctx.query.token;
+  return typeof raw === 'string' && raw ? raw : undefined;
 }
 
-function renderCallbackHTML(opts: { base: string; customPath: string; token: string | null }) {
-  const { base, token } = opts;
-  const safePath = /^[a-zA-Z0-9_\-/.]+$/.test(opts.customPath) ? opts.customPath : '';
-  const homeUrl = `${base}/`;
-  const signinUrl = `${base}/signin?error=invalid_ticket`;
-  const targetUrl = token
-    ? safePath
-      ? `${base}/${safePath}?token=${encodeURIComponent(token)}`
-      : `${base}/?token=${encodeURIComponent(token)}`
-    : signinUrl;
-  const title = token ? '验证成功 - 致远OA 单点登录' : '认证失败 - 致远OA 单点登录';
-  const icon = token ? '&#9989;' : '&#9888;&#65039;';
-  const heading = token ? '验证成功' : '认证失败';
-  const subtitle = token ? '正在跳转到目标页面...' : 'OA 单点登录验证未通过，请重新尝试';
-  const spinColor = token ? ['#52c41a', '#389e0d'] : [];
-  const hint = token ? '即将跳转' : '';
-  const timerJs = token
-    ? `
-  var D=800;setTimeout(function(){
-    document.getElementById('s').classList.remove('hidden');
-    setTimeout(function(){location.replace('${targetUrl}');},200);
-  },D);
-  `
-    : '';
+/** Options are read from `private` first and fall back to the legacy `public` layout. */
+function getOption(options: Record<string, any> | undefined, key: string) {
+  const value = options?.private?.[key];
+  return value === undefined ? options?.public?.[key] : value;
+}
 
-  return `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${title}</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
-.w{display:flex;align-items:center;justify-content:center;min-height:100vh;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%)}
-.c{background:#fff;border-radius:12px;padding:48px 56px;box-shadow:0 16px 48px rgba(0,0,0,.12);text-align:center;max-width:400px;width:90%}
-.ic{font-size:44px;margin-bottom:12px}
-.t{font-size:20px;font-weight:600;color:#1a1a2e;margin-bottom:6px}
-.s{font-size:14px;color:#888;margin-bottom:28px}
-.sp{display:flex;justify-content:center;margin-bottom:20px}
-.h{font-size:12px;color:#bbb}
-.ph{color:#999;font-size:12px;margin-top:24px}
-svg circle.track{fill:none;stroke:#eee;stroke-width:3}
-svg circle.arc{fill:none;stroke-width:3;stroke-linecap:round;stroke-dasharray:90;stroke-dashoffset:70;transform-origin:22px 22px;animation:spin .9s linear infinite}
-@keyframes spin{to{transform:rotate(360deg)}}
-.btn{display:flex;flex-direction:column;gap:12px}
-.btn button{border:none;border-radius:8px;cursor:pointer;font-size:15px;font-weight:500;width:100%;padding:10px 0}
-.btn .b1{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff}
-.btn .b2{background:transparent;color:#888;border:1px solid #ddd}
-.hidden{display:none !important}
-</style>
-</head>
-<body>
-<div class="w">
-  <div class="c">
-    <div id="l" class="${token ? 'hidden' : ''}">
-      <div class="ic">&#128274;</div>
-      <div class="t">致远OA 单点登录</div>
-      <div class="s">正在验证您的身份信息...</div>
-      <div class="sp"><svg width="44" height="44" viewBox="0 0 44 44"><circle class="track" cx="22" cy="22" r="18"/><circle class="arc" cx="22" cy="22" r="18" stroke="url(#g1)"/><defs><linearGradient id="g1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#667eea"/><stop offset="1" stop-color="#764ba2"/></linearGradient></defs></svg></div>
-      <div class="h">请稍候</div>
-    </div>
-    <div id="s" class="${token ? '' : 'hidden'}">
-      <div class="ic">${icon}</div>
-      <div class="t">${heading}</div>
-      <div class="s">${subtitle}</div>
-      ${
-        spinColor.length
-          ? `<div class="sp"><svg width="44" height="44" viewBox="0 0 44 44"><circle class="track" cx="22" cy="22" r="18"/><circle class="arc" cx="22" cy="22" r="18" stroke="url(#g2)"/><defs><linearGradient id="g2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${spinColor[0]}"/><stop offset="1" stop-color="${spinColor[1]}"/></linearGradient></defs></svg></div>`
-          : ''
-      }
-      <div class="h">${hint}</div>
-      ${
-        token
-          ? ''
-          : `<div class="btn" style="margin-top:12px"><button class="b1" onclick="location.reload()">重新尝试</button><button class="b2" onclick="location.replace('${homeUrl}')">返回首页</button></div>`
-      }
-    </div>
-    <div class="ph">Powered by NocoBase</div>
-  </div>
-</div>
-<script>
-  ${timerJs}
-</script>
-</body>
-</html>`;
+type Translate = (key: string, options?: Record<string, unknown>) => string;
+
+/** Everything that can stop a callback from producing a session, including the plugin-level cases. */
+export type CallbackFailureReason = SeeyonFailureReason | 'NO_AUTHENTICATOR' | 'MISSING_TICKET' | 'INTERNAL_ERROR';
+
+type CallbackMessages = CallbackPageMessages & { reasons: Record<CallbackFailureReason, string> };
+
+function getCallbackMessages(ctx: unknown): CallbackMessages {
+  // `ctx.t` is provided by the i18n middleware; fall back to the key so a missing translator never breaks the page.
+  const translate = (ctx as TrackedContext | undefined)?.t;
+  const t: Translate = typeof translate === 'function' ? (key) => translate(key, { ns: namespace }) : (key) => key;
+  return {
+    loadingTitle: t('Seeyon OA single sign-on'),
+    loadingSubtitle: t('Verifying your identity...'),
+    loadingHint: t('Please wait'),
+    successTitle: t('Signed in'),
+    successSubtitle: t('Redirecting to the target page...'),
+    successHint: t('Redirecting now'),
+    failureTitle: t('Sign-in failed'),
+    failureSubtitle: t('OA single sign-on verification failed, please try again'),
+    retry: t('Try again'),
+    home: t('Back to home'),
+    // Actionable reasons: each one points at a different thing the operator has to fix.
+    reasons: {
+      MISSING_TICKET: t('The callback URL has no ticket, please start the sign-in from OA again'),
+      NO_AUTHENTICATOR: t('No enabled Seeyon OA authenticator found, please check Settings > Authentication'),
+      OA_NOT_CONFIGURED: t('The OA host is missing or invalid, please check Settings > Authentication'),
+      OA_UNREACHABLE: t('The OA ticket validation endpoint is unreachable or returned an error'),
+      TICKET_INVALID: t('The OA ticket is invalid or already used'),
+      USER_NOT_FOUND: t('No matching NocoBase user and auto-registration is disabled'),
+      INTERNAL_ERROR: t('The server failed to complete the sign-in, please check the server logs'),
+    },
+  };
 }

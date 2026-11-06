@@ -9,15 +9,17 @@
 
 import { Plugin } from '@nocobase/client';
 import AuthPlugin from '@nocobase/plugin-auth/client';
-import { Options } from './Options';
 import { authType } from '../constants';
-import models from './models';
+import { Options } from './Options';
 import SeeyonCallbackPage from './SeeyonCallbackPage';
 
+/**
+ * The browser always lands on the SPA shell first — NocoBase serves the client `index.html` for HTML paths before
+ * server middlewares run — so the callback page has to exist on the client side and exchange the ticket through the
+ * `seeyonAuth:callback` API.
+ */
 export class PluginSeeyonAuthClient extends Plugin {
   async load() {
-    this.flowEngine.registerModels(models);
-
     const auth = this.app.pm.get(AuthPlugin);
     auth.registerType(authType, {
       components: {
