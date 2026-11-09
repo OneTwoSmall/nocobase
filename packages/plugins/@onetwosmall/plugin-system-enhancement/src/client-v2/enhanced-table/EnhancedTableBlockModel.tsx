@@ -19,6 +19,7 @@ import { createSummaryRenderer } from './SummaryRow';
 import {
   extractSummaryValues,
   isNumericField,
+  parseFilterParam,
   type SummaryColumnMeta,
   type SummaryConfig,
   type SummaryValues,
@@ -60,9 +61,9 @@ const EnhancedTableWrapperInner = observer(({ model, children }: { model?: any; 
     return { numericFields, columnTitles };
   }, [model]);
 
-  // 只跟随筛选/排序参数变化聚合：分页或数据本身变化不应触发重新请求
-  const requestParamsStr = JSON.stringify((model?.resource as any)?.request?.params || {});
   const configKey = JSON.stringify(config);
+  // 记录上一次聚合请求的「筛选 + 聚合配置」，避免分页等无关刷新重复聚合
+  const lastRequestKeyRef = useRef('');
 
   useEffect(() => {
     if (!hasConfig || typeof model?.context?.api?.request !== 'function') {
@@ -70,38 +71,65 @@ const EnhancedTableWrapperInner = observer(({ model, children }: { model?: any; 
       return;
     }
 
-    let isMounted = true;
-    const timer = setTimeout(async () => {
+    const resource = model.resource as any;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const load = async () => {
       try {
         const collectionName = model?.collection?.name;
         if (!collectionName) {
           return;
         }
-        const currentOptions = (model.resource as any).getRefreshRequestOptions?.();
+        // 表格自身的筛选按钮与独立的筛选区块都会改写资源的筛选参数，然后触发一次数据刷新
+        const params = resource?.getRefreshRequestOptions?.()?.params ?? resource?.request?.params;
+        const filter = parseFilterParam(params?.filter);
+        const requestKey = JSON.stringify({ filter: filter ?? null, aggregations: config });
+        if (requestKey === lastRequestKeyRef.current) {
+          return;
+        }
         // 汇总由服务端聚合，前端不再整表取数；数据范围由服务端按当前用户对该集合的 list 权限合并
         const response = await model.context.api.request({
           url: 'systemEnhancementSettings:aggregate',
           method: 'post',
           data: {
             collection: collectionName,
-            dataSourceKey: (model.resource as any).getDataSourceKey?.() || model.collection?.dataSourceKey || 'main',
-            filter: currentOptions?.params?.filter,
+            dataSourceKey: resource?.getDataSourceKey?.() || model.collection?.dataSourceKey || 'main',
+            filter,
             aggregations: config,
           },
         });
-        if (!isMounted) return;
+        if (cancelled) return;
+        lastRequestKeyRef.current = requestKey;
         model.setProps('summaryValues', extractSummaryValues(response));
       } catch (error) {
         console.warn('[system-enhancement] failed to load the summary row values', error);
       }
-    }, SUMMARY_FETCH_DEBOUNCE);
+    };
+
+    const schedule = () => {
+      if (timer) {
+        clearTimeout(timer);
+      }
+      timer = setTimeout(() => {
+        timer = null;
+        load();
+      }, SUMMARY_FETCH_DEBOUNCE);
+    };
+
+    schedule();
+    // 筛选条件变化后资源会重新取数并触发 refresh 事件，汇总行随之更新
+    resource?.on?.('refresh', schedule);
 
     return () => {
-      isMounted = false;
-      clearTimeout(timer);
+      cancelled = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+      resource?.off?.('refresh', schedule);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model, requestParamsStr, hasConfig, configKey]);
+  }, [model, hasConfig, configKey]);
 
   const { selectionStats, mousePos } = useCellSelection(containerRef, columnMeta);
 

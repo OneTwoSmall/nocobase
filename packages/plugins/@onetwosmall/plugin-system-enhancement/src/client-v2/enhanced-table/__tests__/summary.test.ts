@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { extractSummaryValues, formatSummaryValue, isNumericField } from '../summary';
+import { extractSummaryValues, formatSummaryValue, isNumericField, parseFilterParam } from '../summary';
 
 describe('isNumericField', () => {
   it('should detect numeric fields by type or interface', () => {
@@ -52,5 +52,22 @@ describe('extractSummaryValues', () => {
     expect(extractSummaryValues(undefined)).toEqual({});
     expect(extractSummaryValues({ data: null })).toEqual({});
     expect(extractSummaryValues({ data: [1, 2] })).toEqual({});
+  });
+});
+
+describe('parseFilterParam', () => {
+  it('should parse the json string stored by the resource', () => {
+    expect(parseFilterParam('{"status":{"$eq":"active"}}')).toEqual({ status: { $eq: 'active' } });
+  });
+
+  it('should pass through object filters', () => {
+    expect(parseFilterParam({ id: { $eq: 1 } })).toEqual({ id: { $eq: 1 } });
+  });
+
+  it('should ignore empty or invalid filters', () => {
+    expect(parseFilterParam(undefined)).toBeUndefined();
+    expect(parseFilterParam('')).toBeUndefined();
+    expect(parseFilterParam('not-json')).toBeUndefined();
+    expect(parseFilterParam([1, 2])).toBeUndefined();
   });
 });

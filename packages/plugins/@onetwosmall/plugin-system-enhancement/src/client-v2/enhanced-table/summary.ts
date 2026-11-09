@@ -56,3 +56,25 @@ export function extractSummaryValues(response: unknown): SummaryValues {
   const source = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : body;
   return source as SummaryValues;
 }
+
+/**
+ * 表格资源把筛选条件以 JSON 字符串的形式存在 request.params.filter 上，这里统一解析成对象，
+ * 供汇总聚合接口使用。
+ */
+export function parseFilterParam(raw: unknown): Record<string, unknown> | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : undefined;
+    } catch (error) {
+      console.warn('[system-enhancement] failed to parse the table filter', error);
+      return undefined;
+    }
+  }
+  return typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : undefined;
+}
