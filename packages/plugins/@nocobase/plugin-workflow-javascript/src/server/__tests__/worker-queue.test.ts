@@ -8,7 +8,7 @@
  */
 
 import Database from '@nocobase/database';
-import WorkflowPlugin, { JOB_STATUS } from '@nocobase/plugin-workflow';
+import WorkflowPlugin, { EXECUTION_STATUS, JOB_STATUS } from '@nocobase/plugin-workflow';
 import { getApp } from '@nocobase/plugin-workflow-test';
 import { Application } from '@nocobase/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -31,44 +31,119 @@ describe('JavaScript task queue', () => {
     await app.destroy();
   });
 
-  it('republishes unclaimed JavaScript jobs without scanning unrelated jobs or reclaiming stale jobs', async () => {
+  it('only republishes recoverable unclaimed JavaScript jobs', async () => {
     const JobModel = db.getModel('jobs');
     const NodeModel = db.getModel('flow_nodes');
+    const ExecutionModel = db.getModel('executions');
     const now = new Date();
     const stale = new Date(now.getTime() - 180_000);
+    const expired = new Date(now.getTime() - 60_000);
+    const future = new Date(now.getTime() + 60_000);
 
     await NodeModel.create({ id: '9301', type: 'delay' });
     await NodeModel.create({ id: '9302', type: SCRIPT_INSTRUCTION_TYPE });
     await NodeModel.create({ id: '9303', type: SCRIPT_INSTRUCTION_TYPE });
     await NodeModel.create({ id: '9304', type: SCRIPT_INSTRUCTION_TYPE });
+    await NodeModel.create({ id: '9307', type: SCRIPT_INSTRUCTION_TYPE });
+    await NodeModel.create({ id: '9308', type: SCRIPT_INSTRUCTION_TYPE });
+    await NodeModel.create({ id: '9309', type: SCRIPT_INSTRUCTION_TYPE });
+
+    await ExecutionModel.create({
+      id: '9101',
+      status: EXECUTION_STATUS.STARTED,
+      expiresAt: future,
+    });
+    await ExecutionModel.create({
+      id: '9102',
+      status: EXECUTION_STATUS.STARTED,
+    });
+    await ExecutionModel.create({
+      id: '9103',
+      status: EXECUTION_STATUS.STARTED,
+      expiresAt: future,
+    });
+    await ExecutionModel.create({
+      id: '9104',
+      status: EXECUTION_STATUS.STARTED,
+      expiresAt: future,
+    });
+    await ExecutionModel.create({
+      id: '9107',
+      status: EXECUTION_STATUS.RESOLVED,
+    });
+    await ExecutionModel.create({
+      id: '9108',
+      status: EXECUTION_STATUS.STARTED,
+      expiresAt: expired,
+    });
+    await ExecutionModel.create({
+      id: '9109',
+      status: EXECUTION_STATUS.STARTED,
+      expiresAt: future,
+    });
 
     await JobModel.create({
       id: '9201',
+      executionId: '9101',
       nodeId: '9301',
       status: JOB_STATUS.PENDING,
       startedAt: null,
       meta: { args: {} },
+      createdAt: stale,
     });
     await JobModel.create({
       id: '9202',
+      executionId: '9102',
       nodeId: '9302',
       status: JOB_STATUS.PENDING,
       startedAt: null,
       meta: { args: {} },
+      createdAt: stale,
     });
     await JobModel.create({
       id: '9203',
+      executionId: '9103',
       nodeId: '9303',
       status: JOB_STATUS.PENDING,
       startedAt: stale,
       meta: { args: {} },
+      createdAt: stale,
     });
     await JobModel.create({
       id: '9204',
+      executionId: '9104',
       nodeId: '9304',
       status: JOB_STATUS.PENDING,
       startedAt: now,
       meta: { args: {} },
+      createdAt: stale,
+    });
+    await JobModel.create({
+      id: '9207',
+      executionId: '9107',
+      nodeId: '9307',
+      status: JOB_STATUS.PENDING,
+      startedAt: null,
+      meta: { args: {} },
+      createdAt: stale,
+    });
+    await JobModel.create({
+      id: '9208',
+      executionId: '9108',
+      nodeId: '9308',
+      status: JOB_STATUS.PENDING,
+      startedAt: null,
+      meta: { args: {} },
+      createdAt: stale,
+    });
+    await JobModel.create({
+      id: '9209',
+      executionId: '9109',
+      nodeId: '9309',
+      status: JOB_STATUS.PENDING,
+      startedAt: null,
+      meta: { args: {} },
+      createdAt: now,
     });
     await JobModel.update({ updatedAt: stale }, { where: { id: '9203' }, silent: true });
 
@@ -251,12 +326,14 @@ describe('JavaScript task heartbeat', () => {
     vi.useRealTimers();
   });
 
-  it('aborts the local Worker when the claimed job is no longer pending', async () => {
+  it('keeps the local Worker running when the heartbeat update reports no change for the same claim', async () => {
     vi.useFakeTimers();
     const update = vi.fn().mockResolvedValue([0]);
+    const startedAt = new Date();
+    const findByPk = vi.fn().mockResolvedValue({ status: JOB_STATUS.PENDING, startedAt });
     const workflowPlugin = {
       db: {
-        getModel: () => ({ update }),
+        getModel: () => ({ update, findByPk }),
       },
       getLogger: () => ({ error: vi.fn() }),
     } as unknown as WorkflowPlugin;
@@ -264,7 +341,31 @@ describe('JavaScript task heartbeat', () => {
       startClaimHeartbeat(job: { id: string; startedAt: Date }, abort: () => void): () => Promise<void>;
     };
     const abort = vi.fn();
-    const stop = consumer.startClaimHeartbeat({ id: 'job-3', startedAt: new Date() }, abort);
+    const stop = consumer.startClaimHeartbeat({ id: 'job-3', startedAt }, abort);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(findByPk).toHaveBeenCalledWith('job-3', { attributes: ['status', 'startedAt'] });
+    expect(abort).not.toHaveBeenCalled();
+    await stop();
+  });
+
+  it('aborts the local Worker when the claimed job is no longer pending', async () => {
+    vi.useFakeTimers();
+    const update = vi.fn().mockResolvedValue([0]);
+    const startedAt = new Date();
+    const findByPk = vi.fn().mockResolvedValue({ status: JOB_STATUS.ABORTED, startedAt });
+    const workflowPlugin = {
+      db: {
+        getModel: () => ({ update, findByPk }),
+      },
+      getLogger: () => ({ error: vi.fn() }),
+    } as unknown as WorkflowPlugin;
+    const consumer = new TaskConsumer(workflowPlugin, new RunningJobs()) as unknown as {
+      startClaimHeartbeat(job: { id: string; startedAt: Date }, abort: () => void): () => Promise<void>;
+    };
+    const abort = vi.fn();
+    const stop = consumer.startClaimHeartbeat({ id: 'job-4', startedAt }, abort);
 
     await vi.advanceTimersByTimeAsync(30_000);
 

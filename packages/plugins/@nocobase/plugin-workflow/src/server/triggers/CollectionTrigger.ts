@@ -70,7 +70,7 @@ export default class CollectionTrigger extends Trigger {
       then: Joi.array().items(Joi.string()).optional(),
       otherwise: Joi.forbidden(),
     }),
-    condition: Joi.object(),
+    condition: Joi.object().allow(null),
     rollbackOnFailure: Joi.boolean().optional(),
     appends: Joi.when('mode', {
       is: (mode) => mode !== MODE_BITMAP.DESTROY,
@@ -170,7 +170,7 @@ export default class CollectionTrigger extends Trigger {
   }
 
   async prepare(workflow: WorkflowModel, data: Model | Record<string, any> | string | number, options) {
-    const { condition, changed, mode, appends } = workflow.config;
+    const { condition, changed, mode, appends = [] } = workflow.config;
     const [dataSourceName, collectionName] = parseCollectionName(workflow.config.collection);
     const { collectionManager } = this.workflow.app.dataSourceManager.dataSources.get(dataSourceName);
     const collection: Collection = (collectionManager as SequelizeCollectionManager).getCollection(collectionName);

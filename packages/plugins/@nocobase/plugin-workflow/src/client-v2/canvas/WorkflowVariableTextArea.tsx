@@ -11,7 +11,7 @@ import { css, cx } from '@emotion/css';
 import { Button, Input } from 'antd';
 import type { TextAreaProps } from 'antd/es/input';
 import type { TextAreaRef } from 'antd/es/input/TextArea';
-import { FlowContextSelector } from '@nocobase/flow-engine';
+import { FlowContextSelector, type MetaTreeNode } from '@nocobase/flow-engine';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { insertTextAtSelection } from './textAreaInsertion';
 import { formatWorkflowPathToValue } from './workflowVariableConverters';
@@ -20,7 +20,11 @@ import { useWorkflowVariableOptions, type UseWorkflowVariableOptions } from './u
 export interface WorkflowVariableTextAreaProps extends Omit<TextAreaProps, 'value' | 'onChange'> {
   value?: string;
   onChange?: (value: string) => void;
+  /** Ignored when `metaTree` is given. */
   variableOptions?: UseWorkflowVariableOptions;
+  /** An explicit variable tree, replacing the canvas-derived one. See
+   *  `WorkflowVariableInput` for when to reach for this. */
+  metaTree?: MetaTreeNode[];
   delimiters?: readonly [string, string];
 }
 
@@ -37,11 +41,12 @@ const codeTextAreaClassName = css`
   font-family: Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace;
 `;
 
-export function WorkflowVariableTextArea(props: WorkflowVariableTextAreaProps) {
-  const { value = '', onChange, variableOptions, className, style, delimiters = ['{{', '}}'], ...rest } = props;
+function WorkflowVariableTextAreaWithMetaTree(
+  props: Omit<WorkflowVariableTextAreaProps, 'metaTree' | 'variableOptions'> & { metaTree: MetaTreeNode[] },
+) {
+  const { value = '', onChange, metaTree, className, style, delimiters = ['{{', '}}'], ...rest } = props;
   const [innerValue, setInnerValue] = useState(value);
   const inputRef = useRef<TextAreaRef>(null);
-  const metaTree = useWorkflowVariableOptions(variableOptions);
   const metaTreeGetter = useMemo(() => () => metaTree, [metaTree]);
 
   useEffect(() => {
@@ -121,4 +126,16 @@ export function WorkflowVariableTextArea(props: WorkflowVariableTextAreaProps) {
       </div>
     </div>
   );
+}
+
+function CanvasWorkflowVariableTextArea({ variableOptions, ...props }: WorkflowVariableTextAreaProps) {
+  const metaTree = useWorkflowVariableOptions(variableOptions);
+  return <WorkflowVariableTextAreaWithMetaTree {...props} metaTree={metaTree} />;
+}
+
+export function WorkflowVariableTextArea({ metaTree, variableOptions, ...props }: WorkflowVariableTextAreaProps) {
+  if (metaTree !== undefined) {
+    return <WorkflowVariableTextAreaWithMetaTree {...props} metaTree={metaTree} />;
+  }
+  return <CanvasWorkflowVariableTextArea {...props} variableOptions={variableOptions} />;
 }

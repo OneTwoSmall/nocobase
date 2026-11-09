@@ -1,0 +1,130 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
+import { act, render } from '@testing-library/react';
+import React from 'react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const holder = vi.hoisted(() => ({
+  list: vi.fn().mockResolvedValue({ data: { data: [] } }),
+  filter: vi.fn(),
+  flowContextSelector: vi.fn(() => null),
+  remoteSelect: vi.fn(() => null),
+  variableOptions: vi.fn(() => []),
+}));
+
+vi.mock('@nocobase/client-v2', () => ({ RemoteSelect: holder.remoteSelect }));
+vi.mock('@nocobase/flow-engine', async (importOriginal) => ({
+  ...((await importOriginal()) as object),
+  FlowContextSelector: holder.flowContextSelector,
+  useFlowContext: () => ({
+    api: { resource: () => ({ list: holder.list }) },
+    t: (key: string) => key,
+  }),
+}));
+vi.mock('../../canvas/useWorkflowVariableOptions', () => ({
+  useWorkflowVariableOptions: holder.variableOptions,
+}));
+vi.mock('../../canvas/WorkflowVariableTag', () => ({
+  WorkflowVariableTag: ({ value }: { value?: string }) => <span>{value}</span>,
+}));
+vi.mock('../FilterDynamicComponent', () => ({
+  FilterDynamicComponent: (props: Record<string, unknown>) => {
+    holder.filter(props);
+    return null;
+  },
+}));
+vi.mock('../../locale', () => ({ useT: () => (key: string) => key }));
+
+import { UsersSelect } from '../UsersSelect';
+
+describe('UsersSelect', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    holder.variableOptions.mockReturnValue([]);
+  });
+
+  it('filters workflow variables to user key fields', () => {
+    render(<UsersSelect />);
+
+    const options = holder.variableOptions.mock.calls[0][0] as {
+      types: Array<(field: Record<string, unknown>) => boolean>;
+    };
+    expect(options.types[0]({ collectionName: 'users', name: 'id' })).toBe(true);
+    expect(options.types[0]({ collectionName: 'users', name: 'nickname' })).toBe(false);
+    expect(options.types[0]({ isForeignKey: true, target: 'users' })).toBe(true);
+  });
+
+  it('uses the shared variable selector and supports nullable receivers', () => {
+    render(<UsersSelect nullable value="" />);
+
+    expect(holder.flowContextSelector).toHaveBeenCalledWith(
+      expect.objectContaining({ active: false, dropdownFooter: null }),
+      expect.anything(),
+    );
+    const metaTree = holder.flowContextSelector.mock.calls[0][0].metaTree;
+    expect(metaTree.map((node: { name: string }) => node.name)).toEqual([
+      'null',
+      'constant',
+      '$scopes',
+      '$jobsMapByNodeKey',
+    ]);
+  });
+
+  it('requests users from the API when searching', async () => {
+    render(<UsersSelect />);
+
+    const remoteSelectProps = holder.remoteSelect.mock.calls[0][0] as {
+      onSearch: (value: string) => void;
+      request: () => Promise<unknown>;
+      filterOption: boolean;
+    };
+    expect(remoteSelectProps.filterOption).toBe(false);
+
+    await remoteSelectProps.request();
+    expect(holder.list).toHaveBeenLastCalledWith(undefined);
+
+    act(() => remoteSelectProps.onSearch('alice'));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    });
+
+    const searchedProps = holder.remoteSelect.mock.calls.at(-1)?.[0] as typeof remoteSelectProps;
+    await searchedProps.request();
+    expect(holder.list).toHaveBeenLastCalledWith({
+      filter: { nickname: { $includes: 'alice' } },
+    });
+  });
+
+  it('uses caller-provided variable options without rebuilding the workflow variable tree', () => {
+    const variableOptions = [
+      { name: '$context', title: 'Trigger variables', type: 'object', paths: ['$context'], children: [] },
+    ];
+
+    render(<UsersSelect variableOptions={variableOptions} />);
+
+    expect(holder.variableOptions).not.toHaveBeenCalled();
+    expect(holder.flowContextSelector).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metaTree: expect.arrayContaining([expect.objectContaining({ name: '$context' })]),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('forwards transformed workflow variables to user queries', () => {
+    const transformVariableOptions = vi.fn((options) => options);
+
+    render(<UsersSelect value={{ filter: {} }} transformVariableOptions={transformVariableOptions} />);
+
+    expect(holder.filter).toHaveBeenCalledWith(
+      expect.objectContaining({ collection: 'users', transformVariableOptions }),
+    );
+  });
+});

@@ -10,6 +10,7 @@
 import {
   LLMProvider,
   LLMProviderOptions,
+  LLMProviderRequestContext,
   EmbeddingProvider,
   EmbeddingProviderOptions,
   ReasoningOptions,
@@ -27,6 +28,7 @@ export type LLMProviderMeta = {
   provider: new (opts: LLMProviderOptions) => LLMProvider;
   embedding?: new (opts: EmbeddingProviderOptions) => EmbeddingProvider;
   supportWebSearch?: boolean;
+  webSearchModels?: string[];
 };
 
 export enum SupportedModel {
@@ -53,6 +55,7 @@ export type EnabledLLMService = {
   providerTitle?: string;
   enabledModels: EnabledLLMModel[];
   supportWebSearch: boolean;
+  webSearchModels?: string[];
   isToolConflict: boolean;
 };
 
@@ -67,11 +70,12 @@ export class AIManager {
 
   listLLMProviders() {
     const providers = this.llmProviders.entries();
-    return Array.from(providers).map(([name, { title, supportedModel, supportWebSearch }]) => ({
+    return Array.from(providers).map(([name, { title, supportedModel, supportWebSearch, webSearchModels }]) => ({
       name,
       title,
       supportedModel: supportedModel ?? [SupportedModel.LLM],
       supportWebSearch: supportWebSearch ?? false,
+      webSearchModels,
     }));
   }
 
@@ -128,6 +132,7 @@ export class AIManager {
       providerTitle: providerMeta.title,
       enabledModels,
       supportWebSearch: providerMeta.supportWebSearch ?? false,
+      webSearchModels: providerMeta.webSearchModels,
       isToolConflict: providerClient.isToolConflict(),
     };
   }
@@ -158,7 +163,7 @@ export class AIManager {
     return getRecommendedModels(provider);
   }
 
-  async getLLMService(options: LLMModelOptions) {
+  async getLLMService(options: LLMModelOptions, requestContext?: LLMProviderRequestContext) {
     const { llmService, model, webSearch, reasoning } = options ?? {};
 
     // model is required - it's set by the frontend ModelSwitcher
@@ -195,11 +200,16 @@ export class AIManager {
       throw new Error('LLM service provider not found');
     }
 
+    if (webSearch === true && providerOptions.webSearchModels && !providerOptions.webSearchModels.includes(model)) {
+      throw new Error(`Web search is not supported by model "${model}"`);
+    }
+
     const Provider = providerOptions.provider;
     const provider = new Provider({
       app: this.plugin.app,
       serviceOptions: service.options,
       modelOptions,
+      requestContext,
     });
 
     return { provider, model, service };

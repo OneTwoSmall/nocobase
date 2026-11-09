@@ -8,10 +8,13 @@
  */
 
 import React, { useEffect, useMemo } from 'react';
+import { RobotOutlined } from '@ant-design/icons';
 import { Avatar, Card, Radio, Select, Space, Spin, Switch, Tag, Tooltip, Typography, theme } from 'antd';
 import type { RadioGroupProps } from 'antd';
 import { FlowModel, observer, useFlowSettingsContext } from '@nocobase/flow-engine';
 import type { FlowModelContext } from '@nocobase/flow-engine';
+import type { Field } from '@formily/core';
+import { useField } from '@formily/react';
 import { useRequest } from 'ahooks';
 import { AIEmployeeShortcut } from '../../ai-employees/AIEmployeeShortcut';
 import { AddContextButton } from '../../ai-employees/AddContextButton';
@@ -23,7 +26,7 @@ import { dialogController } from '../../ai-employees/stores/dialog-controller';
 import type { AIEmployee, ContextItem, SkillSettings, Task } from '../../ai-employees/types';
 import { useT, tExpr } from '../../locale';
 import { useAIConfigRepository } from '../../repositories/hooks/useAIConfigRepository';
-import type { LLMServiceItem } from '../../repositories/AIConfigRepository';
+import { supportsWebSearchForModel, type LLMServiceItem } from '../../repositories/AIConfigRepository';
 import { RemoteSelect } from '../../components/RemoteSelect';
 
 const { Meta } = Card;
@@ -71,6 +74,43 @@ const isWithinAIChatBoxBlock = (model: FlowModel | null | undefined) => {
   return false;
 };
 
+type AIEmployeePreviewRepository = {
+  aiEmployees?: AIEmployee[];
+  getAIEmployees?: () => Promise<AIEmployee[]>;
+};
+
+const HiddenAIEmployeePreview: React.FC<{
+  aiEmployee: AIEmployeeShortcutModelProps['aiEmployee'];
+  size: number;
+  title: string;
+  repository?: AIEmployeePreviewRepository;
+}> = observer(({ aiEmployee, size, title, repository }) => {
+  const username = aiEmployee?.username;
+  const hasEmployee = !!repository?.aiEmployees?.some((employee) => employee.username === username);
+
+  useEffect(() => {
+    if (username && repository?.getAIEmployees && !hasEmployee) {
+      void repository.getAIEmployees().catch(console.error);
+    }
+  }, [hasEmployee, repository, username]);
+
+  const resolvedAIEmployee = repository?.aiEmployees?.find((employee) => employee.username === username);
+  const avatar = resolvedAIEmployee?.avatar ?? aiEmployee?.avatar;
+
+  return (
+    <Tooltip title={title}>
+      <div style={{ display: 'inline-flex', opacity: 0.3 }}>
+        <Avatar
+          shape="circle"
+          size={size}
+          src={avatar ? avatars(avatar) : undefined}
+          icon={!avatar ? <RobotOutlined /> : undefined}
+        />
+      </div>
+    </Tooltip>
+  );
+});
+
 export class AIEmployeeButtonModel extends AIEmployeeShortcutModel {
   get supportedActionLinkageStates() {
     return ['visible', 'hidden'] as const;
@@ -83,10 +123,21 @@ export class AIEmployeeButtonModel extends AIEmployeeShortcutModel {
   }
 
   protected renderHiddenInConfig(): React.ReactNode {
-    return <div style={{ display: 'inline-flex', opacity: 0.3 }}>{this.render()}</div>;
+    // Keep this preview lightweight: `render()` is already wrapped for reactivity, so calling it here would
+    // re-enter `renderHiddenInConfig` and recurse infinitely until the page freezes.
+    // Resolve the configured employee's avatar from the shared AI config repository instead of mounting the
+    // full shortcut/chatbox runtime. The small preview fetches employee metadata only when it is not cached.
+    const aiConfigRepository = this.flowEngine?.context?.aiConfigRepository as AIEmployeePreviewRepository | undefined;
+    return (
+      <HiddenAIEmployeePreview
+        aiEmployee={this.props.aiEmployee}
+        size={this.props.style?.size ?? 40}
+        title={this.context.t('The button is hidden and only visible when the UI Editor is active')}
+        repository={aiConfigRepository}
+      />
+    );
   }
 }
-
 AIEmployeeButtonModel.registerFlow({
   key: 'buttonSettings',
   title: tExpr('Button settings'),
@@ -132,6 +183,13 @@ const getServiceByOverride = (services: LLMServiceItem[], override?: Task['model
     return undefined;
   }
   return services.find((service) => service.llmService === override.llmService);
+};
+
+export const getShortcutTaskIndexFromFieldPath = (segments: Array<string | number>): number | null => {
+  const tasksIndex = segments.lastIndexOf('tasks');
+  const rawIndex = tasksIndex >= 0 ? segments[tasksIndex + 1] : undefined;
+  const index = typeof rawIndex === 'number' ? rawIndex : typeof rawIndex === 'string' ? Number(rawIndex) : Number.NaN;
+  return Number.isInteger(index) && index >= 0 ? index : null;
 };
 
 export const normalizeShortcutTaskSkillSettings = (
@@ -331,12 +389,14 @@ const TaskWebSearchSwitch: React.FC<{
 }> = observer(({ value, onChange }) => {
   const t = useT();
   const ctx = useFlowSettingsContext<AIEmployeeShortcutModel>();
+  const field = useField<Field>();
   const { services } = useLLMServices();
   const tasks = ctx.model.getStepParams('shortcutSettings', 'editTasks')?.tasks;
-  const currentModel = Array.isArray(tasks) ? tasks.find((task) => task?.webSearch === value)?.model : undefined;
+  const taskIndex = getShortcutTaskIndexFromFieldPath(Array.from(field.path.segments));
+  const currentModel = Array.isArray(tasks) && taskIndex != null ? tasks[taskIndex]?.model : undefined;
   const selectedService = useMemo(() => getServiceByOverride(services, currentModel), [currentModel, services]);
-  const supportWebSearch = selectedService?.supportWebSearch;
-  const isDisabled = !!currentModel && supportWebSearch === false;
+  const supportWebSearch = supportsWebSearchForModel(selectedService, currentModel?.model);
+  const isDisabled = !!currentModel && !supportWebSearch;
 
   useEffect(() => {
     if (isDisabled && value) {

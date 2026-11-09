@@ -46,6 +46,7 @@ export const AIChatBoxCoreView: React.FC = observer(() => {
   const hasDraftUserMessage = draftMessages.some((message) => message.role === 'user');
 
   const { switchAIEmployee } = useChatBoxActions(runtime);
+  const chatBoxRef = useRef<HTMLDivElement | null>(null);
   const defaultUserMessageStateRef = useRef<{
     draftKey?: string;
     value?: string;
@@ -53,6 +54,13 @@ export const AIChatBoxCoreView: React.FC = observer(() => {
   }>({});
 
   useChatBoxEffect(runtime);
+
+  useEffect(() => {
+    chatBoxModel.setChatBoxRef(chatBoxRef);
+    return () => {
+      chatBoxModel.setChatBoxRef(null);
+    };
+  }, [chatBoxModel]);
 
   useEffect(() => {
     if (currentConversation) {
@@ -140,12 +148,15 @@ export const AIChatBoxCoreView: React.FC = observer(() => {
 
   return (
     <div
+      ref={chatBoxRef}
       style={{
         height: '100%',
         maxHeight: '100%',
         minHeight: 0,
+        minWidth: 0,
         display: 'flex',
         flexDirection: 'column',
+        position: 'relative',
         overflow: 'hidden',
         backgroundColor: 'transparent',
       }}
@@ -159,6 +170,7 @@ export const AIChatBoxCoreView: React.FC = observer(() => {
         style={{
           backgroundColor: 'transparent',
           padding: 0,
+          minWidth: 0,
           flex: '0 0 auto',
           position: 'relative',
         }}

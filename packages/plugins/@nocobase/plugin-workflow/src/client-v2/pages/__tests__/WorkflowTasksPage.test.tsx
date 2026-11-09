@@ -129,10 +129,13 @@ function createMultiTaskTypes(taskTypeMap: Record<string, TaskTypeOptions>) {
 }
 
 function makeCtx(taskTypes: WorkflowTaskRegistry, resourceMap: Record<string, WorkflowTaskResource>) {
+  const workflowTaskStats = {
+    listMine: vi.fn().mockResolvedValue({ data: { data: [], meta: { hasNext: false } } }),
+  };
   return {
     api: {
       resource: (name: string) => {
-        const resource = resourceMap[name];
+        const resource = resourceMap[name] ?? (name === 'userWorkflowTaskStats' ? workflowTaskStats : undefined);
         if (!resource) {
           throw new Error(`Missing resource mock: ${name}`);
         }
@@ -161,6 +164,17 @@ describe('WorkflowTasksPage', () => {
     holder.location = { pathname: '/admin/workflow/tasks/demo/pending', search: '', hash: '' };
     holder.isMobileLayout = false;
     holder.detailModalRecords = [];
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: false,
+        media: query,
+        addEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        removeListener: vi.fn(),
+      })),
+    });
   });
 
   it('loads the selected task type with v1-compatible action params', async () => {
@@ -179,13 +193,140 @@ describe('WorkflowTasksPage', () => {
 
     await screen.findByText('Task A');
 
-    expect(taskType.useActionParams).toHaveBeenCalledWith('pending');
+    expect(taskType.useActionParams).toHaveBeenCalledWith('pending', undefined);
     expect(demoTasks.listMine).toHaveBeenCalledWith({
       page: 1,
       pageSize: 20,
       sort: ['-id'],
       filter: { status: 'pending' },
     });
+  });
+
+  it('loads workflow groups and filters the task list by the selected workflow', async () => {
+    const useActionParams = vi.fn((status: string, workflowKey?: string) => ({
+      filter: workflowKey ? { $and: [{ status }, { 'workflow.key': workflowKey }] } : { status },
+    }));
+    const { registry } = createTaskTypes({ useActionParams });
+    const demoTasks = {
+      listMine: vi.fn().mockResolvedValue({
+        data: { data: [{ id: 1, title: 'Task A' }], meta: { count: 1 } },
+      }),
+    };
+    const userWorkflowTasks = {
+      listMine: vi.fn().mockResolvedValue({ data: [{ type: 'demo', stats: { pending: 1, all: 1 } }] }),
+    };
+    const userWorkflowTaskStats = {
+      listMine: vi.fn().mockResolvedValue({
+        data: {
+          data: [{ workflowKey: 'workflow-a', title: 'Workflow A', stats: { pending: 1, all: 1 } }],
+          meta: { hasNext: false },
+        },
+      }),
+    };
+    holder.ctx = makeCtx(registry, { demoTasks, userWorkflowTasks, userWorkflowTaskStats });
+
+    renderWithApp(<WorkflowTasksPage />);
+
+    fireEvent.click(await screen.findByText('Workflow A'));
+
+    await waitFor(() => {
+      expect(useActionParams).toHaveBeenLastCalledWith('pending', 'workflow-a');
+      expect(demoTasks.listMine).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          filter: { $and: [{ status: 'pending' }, { 'workflow.key': 'workflow-a' }] },
+          page: 1,
+        }),
+      );
+    });
+    expect(userWorkflowTaskStats.listMine).toHaveBeenCalledWith({
+      type: 'demo',
+      page: 1,
+      pageSize: 200,
+    });
+  });
+
+  it('toggles the current task type while keeping it selected', async () => {
+    const { registry } = createTaskTypes();
+    const demoTasks = {
+      listMine: vi.fn().mockResolvedValue({ data: { data: [], meta: { count: 0 } } }),
+    };
+    const userWorkflowTasks = {
+      listMine: vi.fn().mockResolvedValue({ data: [{ type: 'demo', stats: { pending: 1, all: 1 } }] }),
+    };
+    holder.ctx = makeCtx(registry, { demoTasks, userWorkflowTasks });
+
+    renderWithApp(<WorkflowTasksPage />);
+
+    await screen.findByTestId('workflow-task-navigation-menu');
+    const menuTitle = screen
+      .getByTestId('workflow-task-navigation-menu')
+      .querySelector<HTMLElement>('.ant-menu-submenu-title');
+    if (!menuTitle) {
+      throw new Error('Expected the task type submenu title to be rendered');
+    }
+    const submenu = menuTitle.closest('.ant-menu-submenu');
+    expect(submenu).toHaveClass('ant-menu-submenu-open', 'ant-menu-submenu-selected');
+
+    fireEvent.click(menuTitle);
+
+    await waitFor(() => expect(submenu).not.toHaveClass('ant-menu-submenu-open'));
+    expect(submenu).toHaveClass('ant-menu-submenu-selected');
+
+    fireEvent.click(menuTitle);
+
+    await waitFor(() => expect(submenu).toHaveClass('ant-menu-submenu-open'));
+    expect(submenu).toHaveClass('ant-menu-submenu-selected');
+    expect(holder.navigate).not.toHaveBeenCalled();
+  });
+
+  it('searches and incrementally loads workflow groups', async () => {
+    const { registry } = createTaskTypes();
+    const demoTasks = {
+      listMine: vi.fn().mockResolvedValue({ data: { data: [], meta: { count: 0 } } }),
+    };
+    const userWorkflowTasks = {
+      listMine: vi.fn().mockResolvedValue({ data: [{ type: 'demo', stats: { pending: 1, all: 1 } }] }),
+    };
+    const userWorkflowTaskStats = {
+      listMine: vi.fn().mockImplementation((params: { page: number; search?: string }) =>
+        Promise.resolve({
+          data: {
+            data: [
+              {
+                workflowKey: params.search ? 'searched' : `workflow-${params.page}`,
+                title: params.search ? 'Searched workflow' : `Workflow ${params.page}`,
+                stats: { pending: 1, all: 1 },
+              },
+            ],
+            meta: { hasNext: !params.search && params.page === 1 },
+          },
+        }),
+      ),
+    };
+    holder.ctx = makeCtx(registry, { demoTasks, userWorkflowTasks, userWorkflowTaskStats });
+
+    renderWithApp(<WorkflowTasksPage />);
+
+    fireEvent.click(await screen.findByText('Load more'));
+    await waitFor(() =>
+      expect(userWorkflowTaskStats.listMine).toHaveBeenCalledWith({ type: 'demo', page: 2, pageSize: 200 }),
+    );
+    expect(await screen.findByText('Workflow 2')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search workflows' }));
+    const searchInput = screen.getByRole('textbox', { name: 'Search workflows' });
+    fireEvent.change(searchInput, { target: { value: 'Searched' } });
+    fireEvent.submit(searchInput.closest('form') as HTMLFormElement);
+
+    await waitFor(() =>
+      expect(userWorkflowTaskStats.listMine).toHaveBeenCalledWith({
+        type: 'demo',
+        page: 1,
+        pageSize: 200,
+        search: 'Searched',
+      }),
+    );
+    expect(await screen.findByText('Searched workflow')).toBeInTheDocument();
   });
 
   it('loads popup records through getPopupRecord for direct detail routes', async () => {
@@ -332,7 +473,8 @@ describe('WorkflowTasksPage', () => {
     renderWithApp(<WorkflowTasksPage />);
 
     await screen.findByTestId('workflow-tasks-mobile');
-    fireEvent.click(screen.getByText('Other tasks'));
+    fireEvent.click(screen.getByRole('button', { name: 'Select workflow' }));
+    fireEvent.click(await screen.findByText('Other tasks'));
 
     expect(holder.navigate).toHaveBeenCalledWith('/admin/workflow/tasks/other/pending');
     expect(holder.navigate).not.toHaveBeenCalledWith('/mobile/page/workflow-tasks/other/pending');
@@ -361,6 +503,37 @@ describe('WorkflowTasksPage', () => {
     expect(document.body.querySelector('.ant-modal')).toBeInTheDocument();
     expect(document.body.querySelector('.ant-drawer')).not.toBeInTheDocument();
     expect(holder.navigate).toHaveBeenCalledWith('/admin/workflow/tasks/demo/pending/9');
+  });
+
+  it('uses the mobile detail page when the desktop route is viewed on a narrow viewport', async () => {
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: query === '(max-width: 768px)',
+        media: query,
+        addEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        removeListener: vi.fn(),
+      })),
+    });
+    const { registry } = createTaskTypes();
+    const demoTasks = {
+      listMine: vi.fn().mockResolvedValue({
+        data: { data: [{ id: 9, title: 'Open me' }], meta: { count: 1 } },
+      }),
+    };
+    const userWorkflowTasks = {
+      listMine: vi.fn().mockResolvedValue({ data: [{ type: 'demo', stats: { pending: 1, all: 1 } }] }),
+    };
+    holder.ctx = makeCtx(registry, { demoTasks, userWorkflowTasks });
+
+    renderWithApp(<WorkflowTasksPage />);
+    fireEvent.click(await screen.findByText('Open me'));
+
+    expect(holder.navigate).toHaveBeenCalledWith('/admin/workflow/tasks/demo/pending/9');
+    expect(await screen.findByTestId('workflow-task-mobile-detail-page')).toBeInTheDocument();
+    expect(document.body.querySelector('.ant-modal')).not.toBeInTheDocument();
   });
 
   it('renders clicked task details as an inline mobile subpage instead of a modal', async () => {
@@ -952,7 +1125,7 @@ describe('WorkflowTasksPage', () => {
       minHeight: '0',
     });
     expect(screen.queryByText('Workflow tasks')).not.toBeInTheDocument();
-    expect(screen.getByTestId('workflow-task-type-menu')).toHaveStyle({ height: '42px', minHeight: '42px' });
+    expect(screen.getByRole('button', { name: 'Select workflow' })).toBeInTheDocument();
     expect(screen.getByTestId('workflow-task-list-region')).toHaveStyle({
       background: '#f5f5f5',
       display: 'flex',

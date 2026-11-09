@@ -27,6 +27,7 @@ import {
   ModelRenderMode,
   useFlowModel,
 } from '@nocobase/flow-engine';
+import type { FlowModel } from '@nocobase/flow-engine';
 import { useTranslation } from 'react-i18next';
 import { TableColumnProps, Tooltip, Space, InputNumber, Button, Divider } from 'antd';
 import { get, omit, capitalize } from 'lodash';
@@ -36,6 +37,7 @@ import { getRowKey } from './utils';
 import { getSavedAssociationTitleField, getTableColumnSortField } from './sortUtils';
 import { getFieldBindingUse, rebuildFieldSubModel } from '../../../internal/utils/rebuildFieldSubModel';
 import { getSavedDateTimeFormatParams, resolveDateTimeDisplayProps } from '../../../utils/dateTimeDisplayProps';
+import { QuickEditDataScopeInput, resolveQuickEditDataScopeStep } from '../../../internal/utils/quickEditDataScope';
 
 export function FieldDeletePlaceholder(props: any) {
   const { t } = useTranslation();
@@ -61,19 +63,28 @@ export function FieldDeletePlaceholder(props: any) {
   );
 }
 
-function FieldWithoutPermissionPlaceholder() {
+type FieldPermissionPlaceholderModel = FlowModel & {
+  fieldPath?: string;
+  forbidden?: { actionName?: string } | null;
+};
+
+export function FieldWithoutPermissionPlaceholder({
+  targetModel,
+}: {
+  targetModel?: FieldPermissionPlaceholderModel;
+} = {}) {
   const { t } = useTranslation();
-  const model: any = useFlowModel();
-  const blockModel = model.context.blockModel;
-  const collection = model.context.collectionField?.collection || blockModel.collection;
-  const dataSource = collection.dataSource;
+  const contextModel = useFlowModel<FieldPermissionPlaceholderModel>();
+  const model = targetModel || contextModel;
+  const collection = model.context.collectionField?.collection || model.context.blockModel?.collection;
+  const dataSource = collection?.dataSource;
   const name = model.context.collectionField?.name || model.fieldPath;
   const nameValue = useMemo(() => {
-    const dataSourcePrefix = `${t(dataSource.displayName || dataSource.key)} > `;
+    const dataSourcePrefix = dataSource ? `${t(dataSource.displayName || dataSource.key)} > ` : '';
     const collectionPrefix = collection ? `${t(collection.title) || collection.name || collection.tableName} > ` : '';
     return `${dataSourcePrefix}${collectionPrefix}${name}`;
-  }, [collection, dataSource.displayName, dataSource.key, name, t]);
-  const { actionName } = model.forbidden;
+  }, [collection, dataSource, name, t]);
+  const actionName = model.forbidden?.actionName || 'view';
   const messageValue = useMemo(() => {
     return t(
       `The current user only has the UI configuration permission, but don't have "{{actionName}}" permission for field "{{name}}"`,
@@ -530,6 +541,36 @@ TableColumnModel.registerFlow({
       },
       handler(ctx, params) {
         ctx.model.setProps('editable', ctx.model.associationPathName ? false : params.editable);
+      },
+    },
+    quickEditDataScope: {
+      title: tExpr('Data scope'),
+      uiMode: {
+        type: 'dialog',
+        props: {
+          width: 800,
+        },
+      },
+      uiSchema: {
+        filter: {
+          type: 'object',
+          'x-decorator': 'FormItem',
+          'x-component': QuickEditDataScopeInput,
+        },
+      },
+      useRawParams: true,
+      defaultParams: {
+        filter: { logic: '$and', items: [] },
+      },
+      hideInSettings(ctx) {
+        if (ctx.model.associationPathName || !ctx.model.props.editable) {
+          return true;
+        }
+        return !resolveQuickEditDataScopeStep(ctx, ctx.collectionField);
+      },
+      handler() {
+        // Settings-only step. The filter is kept raw on the column and handed to the editor model that
+        // QuickEditFormModel builds when the popover opens, so there is nothing to apply to the column itself.
       },
     },
     model: {

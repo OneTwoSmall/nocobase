@@ -50,6 +50,7 @@ import { useUnsavedChangesBeforeClose } from './useUnsavedChangesBeforeClose';
 import { getLLMModelValue, LLMModelMultiSelect, parseLLMModelValue } from '../llm-services/model-select';
 import { AI_EMPLOYEE_USERNAME_CONFLICT } from '../../common/error-codes';
 import {
+  hasKnowledgeBaseDataPlaceholder,
   isValidAIEmployeeNickname,
   isValidAIEmployeeUsername,
   normalizeAIEmployeeName,
@@ -99,6 +100,7 @@ type SettingsAIEmployee = ChatAIEmployee & {
     topK?: number;
     score?: string | number;
     knowledgeBaseKeys?: string[];
+    retrievalStrategy?: 'always' | 'onDemand';
   };
   missingKnowledgeBaseKeys?: string[];
 };
@@ -173,7 +175,14 @@ const readResponseMeta = (response: unknown): Record<string, unknown> => {
     return {};
   }
   const data = response.data;
-  return isRecord(data) ? data : {};
+  if (!isRecord(data)) {
+    return {};
+  }
+  // NocoBase list responses put pagination metadata under response.data.meta.
+  // Returning the whole response body makes meta.count undefined and limits the
+  // controlled table to the current page's row count, so the next-page control
+  // is disabled even when more records exist.
+  return isRecord(data.meta) ? data.meta : data;
 };
 
 const isAIEmployee = (value: unknown): value is SettingsAIEmployee =>
@@ -286,14 +295,51 @@ export async function listKnowledgeBases(apiClient: APIClientLike): Promise<Know
   return Array.isArray(data) ? data.filter(isKnowledgeBaseOption) : [];
 }
 
-const createInitialEmployeeValues = (t: ReturnType<typeof useT>): EmployeeFormValues => ({
+export const normalizeKnowledgeBaseSettingsForForm = (
+  knowledgeBase: SettingsAIEmployee['knowledgeBase'] | undefined,
+  defaultStrategy: 'always' | 'onDemand',
+): NonNullable<SettingsAIEmployee['knowledgeBase']> => ({
+  ...(knowledgeBase ?? {}),
+  retrievalStrategy: knowledgeBase?.retrievalStrategy === 'onDemand' ? 'onDemand' : defaultStrategy,
+});
+
+export const KNOWLEDGE_BASE_DEFAULT_TOP_K = 3;
+export const KNOWLEDGE_BASE_DEFAULT_SCORE = '0.6';
+
+// AI employees saved before the knowledge-base fields existed carry no topK/score/prompt, so switching the feature on
+// has to seed the same defaults the create form uses — otherwise the required rules would reject a form the user never
+// had a chance to fill in.
+export const buildKnowledgeBaseDefaults = (
+  values: EmployeeFormValues,
+  defaultPrompt: string,
+): Partial<EmployeeFormValues> => {
+  const knowledgeBase = values.knowledgeBase ?? {};
+  const patch: Partial<EmployeeFormValues> = {};
+  const knowledgeBasePatch: NonNullable<EmployeeFormValues['knowledgeBase']> = {};
+  if (knowledgeBase.topK === undefined || knowledgeBase.topK === null) {
+    knowledgeBasePatch.topK = KNOWLEDGE_BASE_DEFAULT_TOP_K;
+  }
+  if (knowledgeBase.score === undefined || knowledgeBase.score === null || knowledgeBase.score === '') {
+    knowledgeBasePatch.score = KNOWLEDGE_BASE_DEFAULT_SCORE;
+  }
+  if (Object.keys(knowledgeBasePatch).length) {
+    patch.knowledgeBase = { ...knowledgeBase, ...knowledgeBasePatch };
+  }
+  if (!values.knowledgeBasePrompt) {
+    patch.knowledgeBasePrompt = defaultPrompt;
+  }
+  return patch;
+};
+
+export const createInitialEmployeeValues = (t: ReturnType<typeof useT>): EmployeeFormValues => ({
   username: randomId(),
   enabled: true,
   enableKnowledgeBase: false,
   knowledgeBase: {
     knowledgeBaseKeys: [],
-    topK: 3,
-    score: '0.6',
+    topK: KNOWLEDGE_BASE_DEFAULT_TOP_K,
+    score: KNOWLEDGE_BASE_DEFAULT_SCORE,
+    retrievalStrategy: 'onDemand',
   },
   knowledgeBasePrompt: t('knowledge Base Prompt default'),
   avatar: defaultAvatar,
@@ -509,6 +555,12 @@ export const buildEmployeeSubmitValues = (
   };
   if (isRecord(allValues.modelSettings)) {
     submitValues.modelSettings = normalizeModelSettings(allValues.modelSettings);
+  }
+  if (allValues.knowledgeBase) {
+    submitValues.knowledgeBase = allValues.knowledgeBase;
+  }
+  if (typeof allValues.knowledgeBasePrompt === 'string') {
+    submitValues.knowledgeBasePrompt = allValues.knowledgeBasePrompt;
   }
   return submitValues;
 };
@@ -1035,7 +1087,7 @@ const ToolSettings: React.FC<{ builtIn?: boolean }> = observer(({ builtIn }) => 
   );
 });
 
-const KnowledgeBaseSettings: React.FC<{ apiClient: APIClientLike }> = ({ apiClient }) => {
+export const KnowledgeBaseSettings: React.FC<{ apiClient: APIClientLike }> = ({ apiClient }) => {
   const t = useT();
   const form = Form.useFormInstance<EmployeeFormValues>();
   const enableKnowledgeBase = Form.useWatch('enableKnowledgeBase', form);
@@ -1067,6 +1119,16 @@ const KnowledgeBaseSettings: React.FC<{ apiClient: APIClientLike }> = ({ apiClie
     };
   }, [apiClient]);
 
+  const handleEnableChange = (checked: boolean) => {
+    if (!checked) {
+      return;
+    }
+    const patch = buildKnowledgeBaseDefaults(form.getFieldsValue(), t('knowledge Base Prompt default'));
+    if (Object.keys(patch).length) {
+      form.setFieldsValue(patch);
+    }
+  };
+
   return (
     <>
       <Form.Item
@@ -1075,20 +1137,14 @@ const KnowledgeBaseSettings: React.FC<{ apiClient: APIClientLike }> = ({ apiClie
         valuePropName="checked"
         preserve
       >
-        <Switch />
-      </Form.Item>
-      <Form.Item
-        name="knowledgeBasePrompt"
-        label={formLabel(t('Knowledge Base Prompt'))}
-        rules={[{ required: true }]}
-        preserve
-      >
-        <Input.TextArea disabled={!enableKnowledgeBase} autoSize={{ minRows: 5 }} />
+        <Switch onChange={handleEnableChange} />
       </Form.Item>
       <Form.Item
         name={['knowledgeBase', 'knowledgeBaseKeys']}
         label={formLabel(t('Knowledge Base'))}
-        rules={[{ required: !!enableKnowledgeBase }]}
+        extra={t(
+          'Actual retrieval is limited to knowledge bases accessible to the roles of the user using this AI employee. Inaccessible knowledge bases are excluded.',
+        )}
         preserve
       >
         <Select
@@ -1096,13 +1152,67 @@ const KnowledgeBaseSettings: React.FC<{ apiClient: APIClientLike }> = ({ apiClie
           fieldNames={{ label: 'name', value: 'key' }}
           loading={loading}
           mode="multiple"
+          placeholder={t('Leave blank to retrieve from all knowledge bases')}
           options={options}
         />
       </Form.Item>
-      <Form.Item name={['knowledgeBase', 'topK']} label={formLabel(t('Top K'))} rules={[{ required: true }]} preserve>
+      <Form.Item name={['knowledgeBase', 'retrievalStrategy']} label={formLabel(t('Retrieval strategy'))} preserve>
+        <Radio.Group disabled={!enableKnowledgeBase} aria-label={t('Retrieval strategy')}>
+          <Space direction="vertical">
+            <Radio value="onDemand">
+              <Space direction="vertical" size={0}>
+                <span>{t('Retrieve on demand')}</span>
+                <Typography.Text type="secondary">
+                  {t('The AI employee retrieves knowledge-base content only when it determines that it is needed.')}
+                </Typography.Text>
+              </Space>
+            </Radio>
+            <Radio value="always">
+              <Space direction="vertical" size={0}>
+                <span>{t('Automatically retrieve for every question')}</span>
+                <Typography.Text type="secondary">
+                  {t('Retrieve before every user question, then answer with the retrieved content.')}
+                </Typography.Text>
+              </Space>
+            </Radio>
+          </Space>
+        </Radio.Group>
+      </Form.Item>
+      <Form.Item
+        name="knowledgeBasePrompt"
+        label={formLabel(t('Knowledge Base Prompt'))}
+        extra={t('Include {knowledgeBaseData} in the prompt to insert the retrieved knowledge-base content.')}
+        rules={[
+          { required: !!enableKnowledgeBase },
+          {
+            validator: (_rule, value) =>
+              !enableKnowledgeBase || hasKnowledgeBaseDataPlaceholder(value)
+                ? Promise.resolve()
+                : Promise.reject(
+                    new Error(t('The Knowledge Base Prompt must include {knowledgeBaseData} before you can save it.')),
+                  ),
+          },
+        ]}
+        preserve
+      >
+        <Input.TextArea disabled={!enableKnowledgeBase} autoSize={{ minRows: 5 }} />
+      </Form.Item>
+      <Form.Item
+        name={['knowledgeBase', 'topK']}
+        label={formLabel(t('Top K'))}
+        extra={t('Maximum number of knowledge-base entries returned for each retrieval.')}
+        rules={[{ required: !!enableKnowledgeBase }]}
+        preserve
+      >
         <InputNumber disabled={!enableKnowledgeBase} min={1} max={100} />
       </Form.Item>
-      <Form.Item name={['knowledgeBase', 'score']} label={formLabel(t('Score'))} rules={[{ required: true }]} preserve>
+      <Form.Item
+        name={['knowledgeBase', 'score']}
+        label={formLabel(t('Score'))}
+        extra={t('Minimum similarity score for knowledge-base content to be included in retrieval results.')}
+        rules={[{ required: !!enableKnowledgeBase }]}
+        preserve
+      >
         <InputNumber disabled={!enableKnowledgeBase} min={0} max={1} step={0.1} />
       </Form.Item>
     </>
@@ -1219,6 +1329,9 @@ export const EmployeesPage: React.FC = () => {
   const repo = useAIConfigRepository();
   const [category, setCategory] = useState<EmployeeCategory>('business');
   const [employees, setEmployees] = useState<SettingsAIEmployee[]>([]);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [knowledgeBaseEnabled, setKnowledgeBaseEnabled] = useState(false);
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
@@ -1236,16 +1349,23 @@ export const EmployeesPage: React.FC = () => {
   );
 
   const refresh = useCallback(
-    async (nextCategory = category) => {
+    async (nextCategory = category, nextPage = page, nextPageSize = pageSize) => {
       setLoading(true);
       try {
-        const result = await listAIEmployees(app.apiClient, { category: nextCategory });
+        const result = await listAIEmployees(app.apiClient, {
+          category: nextCategory,
+          page: nextPage,
+          pageSize: nextPageSize,
+        });
         setEmployees(result.data);
+        setTotal(result.total ?? result.data.length);
+        setPage(nextPage);
+        setPageSize(nextPageSize);
       } finally {
         setLoading(false);
       }
     },
-    [app.apiClient, category],
+    [app.apiClient, category, page, pageSize],
   );
 
   useEffect(() => {
@@ -1417,7 +1537,10 @@ export const EmployeesPage: React.FC = () => {
               { label: t('Business'), value: 'business' },
               { label: t('Developer'), value: 'developer' },
             ]}
-            onChange={(event) => setCategory(event.target.value)}
+            onChange={(event) => {
+              setPage(1);
+              setCategory(event.target.value);
+            }}
           />
           <Space>
             <Button icon={<ReloadOutlined />} onClick={() => refresh()}>
@@ -1442,8 +1565,15 @@ export const EmployeesPage: React.FC = () => {
               onChange: setSelectedRowKeys,
             }}
             pagination={{
-              defaultPageSize: 20,
-              showTotal: (total) => t('Total {{count}} items', { count: total }),
+              current: page,
+              pageSize,
+              total,
+              showSizeChanger: true,
+              showTotal: (count) => t('Total {{count}} items', { count }),
+              onChange: (nextPage, nextPageSize) => {
+                setPage(nextPage);
+                setPageSize(nextPageSize);
+              },
             }}
             scroll={{ x: 'max-content', y: '100%' }}
           />
@@ -1471,6 +1601,7 @@ const AIEmployeeDrawerContent: React.FC<{
     initialValuesRef.current = editingRecord
       ? {
           ...editingRecord,
+          knowledgeBase: normalizeKnowledgeBaseSettingsForForm(editingRecord.knowledgeBase, 'always'),
           _aboutMode: editingRecord.builtIn ? (editingRecord.about ? 'custom' : 'system') : undefined,
         }
       : createInitialEmployeeValues(t);

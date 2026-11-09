@@ -7,10 +7,19 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import { DocumentSegmentedWithScore, KnowledgeBase, KnowledgeBaseGroup, SearchOptions } from '../types';
+import {
+  DocumentSegmentedWithScore,
+  KnowledgeBase,
+  KnowledgeBaseGroup,
+  KnowledgeBaseReference,
+  SearchOptions,
+} from '../types';
 
+export type KnowledgeBaseAccessOptions = Pick<SearchOptions, 'knowledgeBaseKeys' | 'roleNames'>;
 export interface KnowledgeBaseFeature {
   getKnowledgeBase(knowledgeBaseKeys: string[]): Promise<KnowledgeBase[]>;
   getKnowledgeBaseGroup(knowledgeBaseKeys: string[]): Promise<KnowledgeBaseGroup[]>;
+  getAccessibleKnowledgeBaseKeys(options: KnowledgeBaseAccessOptions): Promise<string[]>;
   search(options: SearchOptions): Promise<DocumentSegmentedWithScore[]>;
+  getDocumentReferences?(knowledgeBaseDocsIds: Array<number | string>): Promise<KnowledgeBaseReference[]>;
 }

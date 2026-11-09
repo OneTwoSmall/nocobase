@@ -373,6 +373,7 @@ const getProviderDescription = (provider: string, t: ReturnType<typeof useT>) =>
     mimo: 'Xiaomi MIMO',
     mistral: 'Mistral models',
     orcarouter: 'OrcaRouter (model routing gateway)',
+    shengsuanyun: '300+ latest mainstream models across leading model families',
   };
   return descriptions[provider] ? t(descriptions[provider]) : '';
 };
@@ -688,6 +689,17 @@ export const LLMServiceForm: React.FC<{
       {providerKey ? (
         <Form.Item name={['options', 'baseURL']} label={labelWithColon(t('Base URL'))}>
           <EnvVariableInput placeholder={t('Base URL is optional, leave blank to use default (recommended)')} />
+        </Form.Item>
+      ) : null}
+      {providerKey === 'openai' ? (
+        <Form.Item
+          name={['options', 'zdrEnabled']}
+          label={t('Stateless requests')}
+          tooltip={t('Stateless requests description')}
+          valuePropName="checked"
+          initialValue={false}
+        >
+          <Switch aria-label={t('Stateless requests')} />
         </Form.Item>
       ) : null}
       {providerKey ? (

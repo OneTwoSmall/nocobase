@@ -39,7 +39,12 @@
 import React, { useMemo } from 'react';
 import type { MetaTreeNode } from '@nocobase/flow-engine';
 import { useFlowEngine } from '@nocobase/flow-engine';
-import { useCurrentWorkflowContext, useNodeContext, useWorkflowVariableSourceContext } from './contexts';
+import {
+  useCurrentWorkflowContext,
+  useFlowContext,
+  useNodeContext,
+  useWorkflowVariableSourceContext,
+} from './contexts';
 import { useAvailableUpstreams, useUpstreamScopes, type Instruction } from './Instruction';
 import { adaptVariableOptionToMetaTree, adaptVariableOptionsToMetaTree } from './adaptVariableOptionToMetaTree';
 import { NAMESPACE } from '../locale';
@@ -126,9 +131,25 @@ type WorkflowVariablePlugin = {
 /** Resolve the current runtime's workflow client plugin via the neutral
  *  `'workflow'` alias — v1's `PluginWorkflowClient` or v2's
  *  `PluginWorkflowClientV2`, whichever this runtime loaded. */
-function useWorkflowPlugin(): WorkflowVariablePlugin | undefined {
+function isWorkflowVariablePlugin(plugin: unknown): plugin is WorkflowVariablePlugin {
+  if (!plugin || typeof plugin !== 'object') {
+    return false;
+  }
+  const candidate = plugin as Partial<WorkflowVariablePlugin>;
+  return Boolean(candidate.instructions?.get && candidate.systemVariables?.getValues && candidate.triggers?.get);
+}
+
+function useWorkflowPlugin(triggerType?: string): WorkflowVariablePlugin | undefined {
   const flowEngine = useFlowEngine();
-  return flowEngine.context.app.pm.get('workflow') as WorkflowVariablePlugin | undefined;
+  const candidates = [
+    flowEngine.context.app.pm.get('workflow'),
+    flowEngine.context.app.pm.get('@nocobase/plugin-workflow'),
+  ].filter(isWorkflowVariablePlugin);
+  const uniqueCandidates = candidates.filter((candidate, index) => candidates.indexOf(candidate) === index);
+  if (triggerType) {
+    return uniqueCandidates.find((candidate) => candidate.triggers.get(triggerType)) ?? uniqueCandidates[0];
+  }
+  return uniqueCandidates[0];
 }
 
 function prefixMetaTreeNodePaths(node: MetaTreeNode, prefix: string[]): MetaTreeNode {
@@ -169,10 +190,12 @@ export type UseWorkflowVariableOptions = {
   fieldNames?: { label?: string; value?: string; children?: string };
   appends?: string[] | null;
   depth?: number;
+  /** Resolve variables upstream of this node instead of the node being edited. */
+  node?: { key: string };
   /**
    * Include the `$scopes` root. Scope providers (loop / parallel) building
-   * their own local variables must disable this when they call back into the
-   * workflow aggregator, otherwise the scope chain recursively nests itself.
+   * their own local variables must disable this or pass their own `node` to
+   * restrict recursion to enclosing scopes.
    */
   includeScopes?: boolean;
 };
@@ -185,7 +208,8 @@ export type UseWorkflowVariableOptions = {
 function useNodeResultScope(options: UseWorkflowVariableOptions): MetaTreeNode | null {
   const flowEngine = useFlowEngine();
   const plugin = useWorkflowPlugin();
-  const current = useNodeContext();
+  const contextNode = useNodeContext();
+  const current = options.node ?? contextNode;
   const upstreams = useAvailableUpstreams(current);
 
   const children: MetaTreeNode[] = [];
@@ -243,10 +267,15 @@ function useEnvScope(): MetaTreeNode | null {
  */
 function useTriggerScope(options: UseWorkflowVariableOptions): MetaTreeNode | null {
   const flowEngine = useFlowEngine();
-  const plugin = useWorkflowPlugin();
   const variableSourceWorkflow = useWorkflowVariableSourceContext();
   const currentWorkflow = useCurrentWorkflowContext();
-  const workflow = variableSourceWorkflow ?? currentWorkflow;
+  const canvasWorkflow = useFlowContext().workflow;
+  const workflow = variableSourceWorkflow?.type
+    ? variableSourceWorkflow
+    : currentWorkflow?.type
+      ? currentWorkflow
+      : canvasWorkflow;
+  const plugin = useWorkflowPlugin(workflow?.type);
   const t = (key: string) => flowEngine.context.t(key, { ns: NAMESPACE });
   if (!workflow) {
     return null;
@@ -316,7 +345,8 @@ function useSystemScope(): MetaTreeNode | null {
 function useScopeVariablesScope(options: UseWorkflowVariableOptions): MetaTreeNode | null {
   const flowEngine = useFlowEngine();
   const plugin = useWorkflowPlugin();
-  const current = useNodeContext();
+  const contextNode = useNodeContext();
+  const current = options.node ?? contextNode;
   const scopes = useUpstreamScopes(current);
 
   if (options.includeScopes === false) {
@@ -388,10 +418,16 @@ export function useWorkflowVariableOptions(options: UseWorkflowVariableOptions =
   const system = useSystemScope();
   const env = useEnvScope();
 
-  const current = useNodeContext();
+  const contextNode = useNodeContext();
+  const current = options.node ?? contextNode;
   const variableSourceWorkflow = useWorkflowVariableSourceContext();
   const currentWorkflow = useCurrentWorkflowContext();
-  const workflow = variableSourceWorkflow ?? currentWorkflow;
+  const canvasWorkflow = useFlowContext().workflow;
+  const workflow = variableSourceWorkflow?.type
+    ? variableSourceWorkflow
+    : currentWorkflow?.type
+      ? currentWorkflow
+      : canvasWorkflow;
   // A signature that changes only when the variable tree's *structure* could change — the current node, its upstream
   // chain (node-result), its branching scopes, and the workflow (trigger). Lazy children resolved into the tree by the
   // picker are NOT part of this key, so they persist until the structure itself changes.

@@ -17,11 +17,13 @@ import {
   ollamaProviderOptions,
   orcarouterProviderOptions,
   openaiResponsesProviderOptions,
+  shengsuanyunProviderOptions,
 } from '../llm-providers';
 import {
   EmptyProviderSettingsForm,
   OrcaRouterProviderSettingsForm,
   ProviderSettingsForm,
+  ShengSuanYunProviderSettingsForm,
 } from '../llm-providers/forms';
 
 const V1_REGISTERED_PROVIDERS = [
@@ -37,6 +39,7 @@ const V1_REGISTERED_PROVIDERS = [
   'mimo',
   'mistral',
   'orcarouter',
+  'shengsuanyun',
 ];
 
 describe('plugin-ai client-v2 LLM providers', () => {
@@ -55,12 +58,18 @@ describe('plugin-ai client-v2 LLM providers', () => {
     expect(plugin.aiManager.llmProviders.get('openai')).toBe(openaiResponsesProviderOptions);
     expect(plugin.aiManager.llmProviders.get('ollama')).toBe(ollamaProviderOptions);
     expect(plugin.aiManager.llmProviders.get('orcarouter')).toBe(orcarouterProviderOptions);
+    expect(plugin.aiManager.llmProviders.get('shengsuanyun')).toBe(shengsuanyunProviderOptions);
   });
 
   it('uses v2 provider settings components without v1 schema forms', () => {
     expect(openaiResponsesProviderOptions.components.ProviderSettingsForm).toBe(ProviderSettingsForm);
+    expect(
+      builtinLLMProviderOptions.find(([name]) => name === 'openai-completions')?.[1].components.ProviderSettingsForm,
+    ).toBe(ProviderSettingsForm);
     expect(ollamaProviderOptions.components.ProviderSettingsForm).toBe(EmptyProviderSettingsForm);
     expect(orcarouterProviderOptions.components.ProviderSettingsForm).toBe(OrcaRouterProviderSettingsForm);
+    expect(shengsuanyunProviderOptions.components.ProviderSettingsForm).toBe(ShengSuanYunProviderSettingsForm);
+    expect(shengsuanyunProviderOptions.components.ModelSettingsForm).toBeDefined();
     expect(openaiResponsesProviderOptions.components.ModelSettingsForm).toBeDefined();
   });
 
@@ -102,6 +111,14 @@ describe('plugin-ai client-v2 LLM providers', () => {
       'presencePenalty',
       'temperature',
       'topP',
+      'responseFormat',
+      'timeout',
+      'maxRetries',
+    ]);
+    expect(getBuiltinLLMProviderModelOptionFields('shengsuanyun').map((field) => field.name)).toEqual([
+      'temperature',
+      'topP',
+      'maxCompletionTokens',
       'responseFormat',
       'timeout',
       'maxRetries',

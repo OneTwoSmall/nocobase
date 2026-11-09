@@ -206,6 +206,11 @@ export function MobileLazySelect(props: Readonly<LazySelectProps>) {
         return;
       }
       const selectedId = vals[0];
+      if (selectedId === undefined) {
+        onChange(undefined as unknown as AssociationOption);
+        handleClose();
+        return;
+      }
       const record = optionMap.get(selectedId);
       if (record) {
         if (valueMode === 'value') {
@@ -258,6 +263,7 @@ export function MobileLazySelect(props: Readonly<LazySelectProps>) {
     <>
       <Select
         {...restProps}
+        disabled={disabled}
         dropdownStyle={buildDropdownStyle(dropdownStyle)}
         fieldNames={fieldNames}
         options={realOptions}

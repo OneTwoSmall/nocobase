@@ -8,6 +8,8 @@
  */
 
 import {
+  ACLContext,
+  APIClient,
   BaseLayoutModel,
   ChildPageModel,
   KeepAlive,
@@ -22,6 +24,8 @@ import { NocoBaseDesktopRouteType, type NocoBaseDesktopRoute } from '@nocobase/c
 import { App as AntdApp, Card, ConfigProvider, Tabs, theme as antdTheme, type ThemeConfig } from 'antd';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import axios, { type AxiosInstance } from 'axios';
+import MockAdapter from 'axios-mock-adapter';
 import {
   createViewScopedEngine,
   FlowEngine,
@@ -114,11 +118,26 @@ describe('plugin-ui-layout mobile models', () => {
     window.localStorage.removeItem(FLOW_SETTINGS_PREFERENCE_STORAGE_KEY);
   });
 
+  function createACLContextValue(allowConfigUI = true) {
+    return {
+      loading: false,
+      data: {
+        data: {
+          snippets: allowConfigUI ? ['ui.*'] : [],
+        },
+        meta: {},
+      },
+      refresh: vi.fn(async () => {}),
+    };
+  }
+
   function renderMobileLayoutWithRouteRepository(
     routeRepository: MobileRouteRepositoryForTest,
     options: {
+      allowConfigUI?: boolean;
       beforeRender?: (model: MobileLayoutModel) => void;
       api?: {
+        axios?: AxiosInstance;
         request: (options: Record<string, unknown>) => Promise<{ data?: { data?: NocoBaseDesktopRoute[] } }>;
       };
       initialEntries?: string[];
@@ -172,6 +191,7 @@ describe('plugin-ui-layout mobile models', () => {
       use: 'MobileLayoutModel',
       props: {
         layout: {
+          layoutModelClass: 'MobileLayoutModel',
           routeName: 'mobile',
           routePath: '/v/mobile',
           uid: 'mobile-layout-model-render-test',
@@ -185,40 +205,46 @@ describe('plugin-ui-layout mobile models', () => {
         FlowEngineProvider,
         { engine },
         React.createElement(
-          ConfigProvider,
+          ACLContext.Provider,
           {
-            theme: options.theme,
+            value: createACLContextValue(options.allowConfigUI !== false),
           },
           React.createElement(
-            AntdApp,
-            null,
+            ConfigProvider,
+            {
+              theme: options.theme,
+            },
             React.createElement(
-              MemoryRouter,
-              {
-                initialEntries: options.initialEntries || [
-                  options.memoryRouterBasename ? `${options.memoryRouterBasename}/mobile` : '/v/mobile',
-                ],
-                basename: options.memoryRouterBasename,
-              },
+              AntdApp,
+              null,
               React.createElement(
-                Routes,
-                null,
-                options.outletElement
-                  ? React.createElement(
-                      Route,
-                      {
-                        path: routerRoutePath,
+                MemoryRouter,
+                {
+                  initialEntries: options.initialEntries || [
+                    options.memoryRouterBasename ? `${options.memoryRouterBasename}/mobile` : '/v/mobile',
+                  ],
+                  basename: options.memoryRouterBasename,
+                },
+                React.createElement(
+                  Routes,
+                  null,
+                  options.outletElement
+                    ? React.createElement(
+                        Route,
+                        {
+                          path: routerRoutePath,
+                          element: model.render(),
+                        },
+                        React.createElement(Route, {
+                          path: ':name',
+                          element: options.outletElement,
+                        }),
+                      )
+                    : React.createElement(Route, {
+                        path: `${routerRoutePath}/*`,
                         element: model.render(),
-                      },
-                      React.createElement(Route, {
-                        path: ':name',
-                        element: options.outletElement,
                       }),
-                    )
-                  : React.createElement(Route, {
-                      path: `${routerRoutePath}/*`,
-                      element: model.render(),
-                    }),
+                ),
               ),
             ),
           ),
@@ -1223,18 +1249,22 @@ describe('plugin-ui-layout mobile models', () => {
         FlowEngineProvider,
         { engine },
         React.createElement(
-          AntdApp,
-          null,
+          ACLContext.Provider,
+          { value: createACLContextValue() },
           React.createElement(
-            MemoryRouter,
-            { initialEntries: ['/v/mobile'] },
+            AntdApp,
+            null,
             React.createElement(
-              Routes,
-              null,
-              React.createElement(Route, {
-                path: '/v/mobile/*',
-                element: model.render(),
-              }),
+              MemoryRouter,
+              { initialEntries: ['/v/mobile'] },
+              React.createElement(
+                Routes,
+                null,
+                React.createElement(Route, {
+                  path: '/v/mobile/*',
+                  element: model.render(),
+                }),
+              ),
             ),
           ),
         ),
@@ -1406,18 +1436,22 @@ describe('plugin-ui-layout mobile models', () => {
         FlowEngineProvider,
         { engine },
         React.createElement(
-          AntdApp,
-          null,
+          ACLContext.Provider,
+          { value: createACLContextValue() },
           React.createElement(
-            MemoryRouter,
-            { initialEntries: ['/v/mobile'] },
+            AntdApp,
+            null,
             React.createElement(
-              Routes,
-              null,
-              React.createElement(Route, {
-                path: '/v/mobile/*',
-                element: model.render(),
-              }),
+              MemoryRouter,
+              { initialEntries: ['/v/mobile'] },
+              React.createElement(
+                Routes,
+                null,
+                React.createElement(Route, {
+                  path: '/v/mobile/*',
+                  element: model.render(),
+                }),
+              ),
             ),
           ),
         ),
@@ -1568,6 +1602,243 @@ describe('plugin-ui-layout mobile models', () => {
     unmount();
 
     expect(deactivateLayout).toHaveBeenCalledTimes(1);
+  });
+
+  it('should scope desktop route upserts while the standard mobile layout is mounted', async () => {
+    const axiosInstance = axios.create();
+    const mock = new MockAdapter(axiosInstance, { onNoMatch: 'throwException' });
+    let requestParams: unknown;
+    mock.onPost(/desktopRoutes:updateOrCreate/).reply((config) => {
+      requestParams = config.params;
+      return [200, {}];
+    });
+    const api = {
+      axios: axiosInstance,
+      request: vi.fn(async () => ({ data: { data: [] } })),
+    };
+    const routeRepository: MobileRouteRepositoryForTest = {
+      listAccessible: () => [],
+      setRoutes: vi.fn(),
+      activateLayout: vi.fn(() => vi.fn()),
+    };
+
+    const { unmount } = renderMobileLayoutWithRouteRepository(routeRepository, { api });
+
+    await axiosInstance.post(
+      'desktopRoutes:updateOrCreate',
+      {},
+      {
+        params: {
+          filterKeys: ['schemaUid'],
+        },
+      },
+    );
+    expect(requestParams).toEqual({
+      filterKeys: ['schemaUid'],
+      layout: 'mobile-layout-model-render-test',
+    });
+
+    await axiosInstance.post(
+      'desktopRoutes:updateOrCreate',
+      {},
+      {
+        params: {
+          filterKeys: ['schemaUid'],
+          layout: 'explicit-layout',
+        },
+      },
+    );
+    expect(requestParams).toEqual({
+      filterKeys: ['schemaUid'],
+      layout: 'explicit-layout',
+    });
+
+    await axiosInstance.post(
+      'desktopRoutes:updateOrCreate',
+      {},
+      {
+        params: {
+          filterKeys: ['schemaUid'],
+          portal: 'explicit-portal',
+        },
+      },
+    );
+    expect(requestParams).toEqual({
+      filterKeys: ['schemaUid'],
+      portal: 'explicit-portal',
+    });
+
+    await axiosInstance.post(
+      'desktopRoutes:updateOrCreate?portal=query-portal',
+      {},
+      {
+        params: {
+          filterKeys: ['schemaUid'],
+        },
+      },
+    );
+    expect(requestParams).toEqual({
+      filterKeys: ['schemaUid'],
+    });
+
+    await axiosInstance.post(
+      'desktopRoutes:updateOrCreate?layout[]=query-layout',
+      {},
+      {
+        params: {
+          filterKeys: ['schemaUid'],
+        },
+      },
+    );
+    expect(requestParams).toEqual({
+      filterKeys: ['schemaUid'],
+    });
+
+    await axiosInstance.post(
+      'desktopRoutes:updateOrCreate?portal[]=query-portal',
+      {},
+      {
+        params: {
+          filterKeys: ['schemaUid'],
+        },
+      },
+    );
+    expect(requestParams).toEqual({
+      filterKeys: ['schemaUid'],
+    });
+
+    unmount();
+    await axiosInstance.post(
+      'desktopRoutes:updateOrCreate',
+      {},
+      {
+        params: {
+          filterKeys: ['schemaUid'],
+        },
+      },
+    );
+    expect(requestParams).toEqual({
+      filterKeys: ['schemaUid'],
+    });
+    mock.restore();
+  });
+
+  it('should serialize URLSearchParams while scoping standard mobile route upserts', async () => {
+    const apiClient = new APIClient({ baseURL: 'https://example.test/api/' });
+    const mock = new MockAdapter(apiClient.axios, { onNoMatch: 'throwException' });
+    const requestUrls: string[] = [];
+    mock.onPost('desktopRoutes:updateOrCreate').reply((config) => {
+      const paramsSerializer = config.paramsSerializer;
+      const serializeParams = typeof paramsSerializer === 'function' ? paramsSerializer : paramsSerializer?.serialize;
+      if (!serializeParams) {
+        throw new Error('Expected the APIClient params serializer to be configured.');
+      }
+
+      const requestUrl = new URL(config.url || '', config.baseURL);
+      const serializedParams = serializeParams(config.params);
+      if (serializedParams) {
+        requestUrl.search = requestUrl.search ? `${requestUrl.search.slice(1)}&${serializedParams}` : serializedParams;
+      }
+      requestUrls.push(requestUrl.toString());
+      return [200, {}];
+    });
+    const api = {
+      axios: apiClient.axios,
+      request: vi.fn(async () => ({ data: { data: [] } })),
+    };
+    const routeRepository: MobileRouteRepositoryForTest = {
+      listAccessible: () => [],
+      setRoutes: vi.fn(),
+      activateLayout: vi.fn(() => vi.fn()),
+    };
+
+    const { unmount } = renderMobileLayoutWithRouteRepository(routeRepository, { api });
+    const params = new URLSearchParams();
+    params.append('filterKeys[]', 'schemaUid');
+    params.append('filterKeys[]', 'parentId');
+
+    await apiClient.axios.post('desktopRoutes:updateOrCreate', {}, { params });
+
+    let requestUrl = new URL(requestUrls[requestUrls.length - 1]);
+    expect(requestUrl.searchParams.getAll('filterKeys[]')).toEqual(['schemaUid', 'parentId']);
+    expect(requestUrl.searchParams.get('layout')).toBe('mobile-layout-model-render-test');
+    expect(params.has('layout')).toBe(false);
+
+    const explicitLayoutParams = new URLSearchParams({ layout: 'explicit-layout' });
+    await apiClient.axios.post('desktopRoutes:updateOrCreate', {}, { params: explicitLayoutParams });
+    requestUrl = new URL(requestUrls[requestUrls.length - 1]);
+    expect(requestUrl.searchParams.get('layout')).toBe('explicit-layout');
+
+    const explicitPortalParams = new URLSearchParams({ portal: 'explicit-portal' });
+    await apiClient.axios.post('desktopRoutes:updateOrCreate', {}, { params: explicitPortalParams });
+    requestUrl = new URL(requestUrls[requestUrls.length - 1]);
+    expect(requestUrl.searchParams.get('portal')).toBe('explicit-portal');
+    expect(requestUrl.searchParams.has('layout')).toBe(false);
+
+    const explicitArrayLayoutParams = new URLSearchParams();
+    explicitArrayLayoutParams.append('layout[]', 'explicit-array-layout');
+    await apiClient.axios.post('desktopRoutes:updateOrCreate', {}, { params: explicitArrayLayoutParams });
+    requestUrl = new URL(requestUrls[requestUrls.length - 1]);
+    expect(requestUrl.searchParams.getAll('layout[]')).toEqual(['explicit-array-layout']);
+    expect(requestUrl.searchParams.has('layout')).toBe(false);
+    expect(explicitArrayLayoutParams.getAll('layout[]')).toEqual(['explicit-array-layout']);
+
+    const explicitArrayPortalParams = new URLSearchParams();
+    explicitArrayPortalParams.append('portal[]', 'explicit-array-portal');
+    await apiClient.axios.post('desktopRoutes:updateOrCreate', {}, { params: explicitArrayPortalParams });
+    requestUrl = new URL(requestUrls[requestUrls.length - 1]);
+    expect(requestUrl.searchParams.getAll('portal[]')).toEqual(['explicit-array-portal']);
+    expect(requestUrl.searchParams.has('layout')).toBe(false);
+    expect(explicitArrayPortalParams.getAll('portal[]')).toEqual(['explicit-array-portal']);
+    unmount();
+    mock.restore();
+  });
+
+  it('should not scope desktop route upserts for a mobile portal layout model', async () => {
+    const axiosInstance = axios.create();
+    const mock = new MockAdapter(axiosInstance, { onNoMatch: 'throwException' });
+    let requestParams: unknown;
+    mock.onPost('desktopRoutes:updateOrCreate').reply((config) => {
+      requestParams = config.params;
+      return [200, {}];
+    });
+    const api = {
+      axios: axiosInstance,
+      request: vi.fn(async () => ({ data: { data: [] } })),
+    };
+    const routeRepository: MobileRouteRepositoryForTest = {
+      listAccessible: () => [],
+      setRoutes: vi.fn(),
+      activateLayout: vi.fn(() => vi.fn()),
+    };
+
+    const { unmount } = renderMobileLayoutWithRouteRepository(routeRepository, {
+      api,
+      beforeRender: (model) => {
+        model.setProps({
+          ...model.props,
+          layout: {
+            ...model.props.layout,
+            layoutModelClass: 'MultiPortalMobileLayoutModel',
+          },
+        });
+      },
+    });
+
+    await axiosInstance.post(
+      'desktopRoutes:updateOrCreate',
+      {},
+      {
+        params: {
+          filterKeys: ['schemaUid'],
+        },
+      },
+    );
+    expect(requestParams).toEqual({
+      filterKeys: ['schemaUid'],
+    });
+    unmount();
+    mock.restore();
   });
 
   it('should load mobile routes once when a child route also ensures accessible routes', async () => {
@@ -2589,6 +2860,44 @@ describe('plugin-ui-layout mobile models', () => {
       });
       expect(screen.getByRole('button', { name: 'Add mobile tab' })).toBeInTheDocument();
       expect(screen.queryByText('Add block')).not.toBeInTheDocument();
+    } finally {
+      restoreBreakpoint();
+    }
+  });
+
+  it.each([
+    { title: 'without a stored preference', storedPreference: undefined },
+    { title: 'with an enabled stored preference', storedPreference: '1' },
+  ])('should hide the UI editor when the role cannot configure the interface $title', async ({ storedPreference }) => {
+    const restoreBreakpoint = mockDesktopBreakpoint();
+    const routeRepository: MobileRouteRepositoryForTest = {
+      listAccessible: () => [],
+      ensureAccessibleLoaded: vi.fn(async () => []),
+    };
+
+    try {
+      if (storedPreference) {
+        window.localStorage.setItem(FLOW_SETTINGS_PREFERENCE_STORAGE_KEY, storedPreference);
+      }
+      const { engine } = renderMobileLayoutWithRouteRepository(routeRepository, {
+        allowConfigUI: false,
+        beforeRender: (model) => {
+          // Start enabled so the assertion below proves the permission-sync effect actively disables Flow Settings.
+          model.flowEngine.flowSettings.enabled = true;
+        },
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText('No mobile pages yet')).toBeInTheDocument();
+      });
+      expect(screen.queryByTestId('ui-editor-button')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Add mobile tab' })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Pad preview' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Mobile preview' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'QR code' })).toBeInTheDocument();
+      await waitFor(() => {
+        expect(engine.context.flowSettingsEnabled).toBe(false);
+      });
     } finally {
       restoreBreakpoint();
     }
@@ -3955,6 +4264,65 @@ describe('plugin-ui-layout mobile models', () => {
       ['home-page', true],
       ['reports-page', false],
     ]);
+  });
+
+  it('should keep a directly linked hidden mobile page reachable instead of redirecting to the first visible page', async () => {
+    const events: string[] = [];
+    const routes: NocoBaseDesktopRoute[] = [
+      {
+        id: 1,
+        type: NocoBaseDesktopRouteType.flowPage,
+        title: 'Home',
+        schemaUid: 'home-page',
+        sort: 10,
+      },
+      {
+        id: 2,
+        type: NocoBaseDesktopRouteType.flowPage,
+        title: 'Hidden',
+        schemaUid: 'hidden-page',
+        hideInMenu: true,
+        sort: 20,
+      },
+    ];
+    let layoutModel: MobileLayoutModel | undefined;
+    const routeRepository: MobileRouteRepositoryForTest = {
+      listAccessible: vi.fn(() => routes),
+      isAccessibleLoaded: vi.fn(() => true),
+      ensureAccessibleLoaded: vi.fn(async () => routes),
+    };
+
+    const renderResult = renderMobileLayoutWithRouteRepository(routeRepository, {
+      initialEntries: ['/v/mobile/hidden-page'],
+      outletElement: React.createElement(
+        React.Fragment,
+        null,
+        React.createElement(MobileRoutePageProbe, {
+          events,
+          getModel: () => {
+            if (!layoutModel) {
+              throw new Error('Mobile layout model is not ready.');
+            }
+            return layoutModel;
+          },
+        }),
+        React.createElement(MobileCurrentPathProbe),
+      ),
+      beforeRender: (model) => {
+        layoutModel = model;
+      },
+    });
+
+    await waitFor(() => {
+      expect(routeRepository.ensureAccessibleLoaded).toHaveBeenCalled();
+    });
+
+    await waitFor(() => {
+      const visiblePaths = Array.from(renderResult.container.querySelectorAll('[data-testid="mobile-current-path"]'))
+        .filter((element) => !element.closest('div[style*="display: none"]'))
+        .map((element) => element.textContent);
+      expect(visiblePaths).toEqual(['/v/mobile/hidden-page']);
+    });
   });
 
   it('should read mobile link routes from url with href fallback', () => {

@@ -52,6 +52,7 @@ describe('ExecutionViewPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     holder.executionCanvasProps = null;
+    document.title = '';
   });
 
   it('loads execution canvas data and renders ExecutionCanvas instead of the empty placeholder', async () => {
@@ -86,12 +87,36 @@ describe('ExecutionViewPage', () => {
     await waitFor(() => {
       expect(executions.get).toHaveBeenCalledWith({
         filterByTk: '369411612409856',
-        appends: ['jobs', 'workflow', 'workflow.nodes', 'workflow.versionStats', 'workflow.stats'],
-        except: ['jobs.result', 'workflow.options'],
       });
     });
 
     expect(holder.executionCanvasProps?.record?.id).toBe(369411612409856);
     expect(screen.queryByText('Workflow canvas editor is being migrated to the new UI.')).toBeNull();
+  });
+
+  it('updates the browser title after the execution record is loaded', async () => {
+    document.title = 'Loading...';
+    holder.ctx = {
+      api: {
+        resource: () => ({
+          get: vi.fn().mockResolvedValue({
+            data: {
+              data: {
+                id: 369411612409856,
+                jobs: [],
+                workflow: { title: 'Approval workflow', nodes: [] },
+              },
+            },
+          }),
+        }),
+      },
+    };
+
+    renderWithApp(<ExecutionViewPage />);
+
+    await screen.findByTestId('execution-canvas');
+    await waitFor(() => {
+      expect(document.title).toBe('Approval workflow - Execution history - NocoBase');
+    });
   });
 });

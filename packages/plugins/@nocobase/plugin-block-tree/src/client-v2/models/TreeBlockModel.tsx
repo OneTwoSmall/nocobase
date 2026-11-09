@@ -55,6 +55,31 @@ const getEffectiveFieldModelUse = (fieldModel: any) => {
   return fieldModel?.getStepParams?.('fieldBinding', 'use') || fieldModel?.use;
 };
 
+const applyTitleFieldViewAcl = async (
+  context: FlowModelContext,
+  fieldModel: FlowModel,
+  initParams: ReturnType<TreeBlockModel['getTitleFieldSettingsInitParams']>,
+) => {
+  if (context.skipAclCheck || typeof context.aclCheck !== 'function') {
+    return;
+  }
+
+  const actionName = 'view';
+  const allowed = await context.aclCheck({
+    dataSourceKey: initParams.dataSourceKey,
+    resourceName: initParams.collectionName,
+    actionName,
+    fields: [initParams.fieldPath],
+    allowedActions: null,
+  });
+
+  if (!allowed) {
+    fieldModel.forbidden = { actionName };
+  } else if (fieldModel.forbidden?.actionName === actionName) {
+    fieldModel.forbidden = null;
+  }
+};
+
 const getTitleFieldStepParams = (fieldModel: any, initParams: any, preservePrevious: boolean) => {
   const previousStepParams = preservePrevious ? fieldModel?.getStepParams?.() || {} : {};
   const { fieldBinding: _fieldBinding, ...stepParams } = previousStepParams;
@@ -200,10 +225,6 @@ export class TreeBlockModel extends CollectionBlockModel {
 
   onInit(options) {
     super.onInit(options);
-    this.context.defineProperty('collectionField', {
-      get: () => this.collection?.getField?.(this.getTitleFieldName()),
-      cache: false,
-    });
     this.ensureTitleFieldSettingsContainer();
     this.migrateLegacyTitleFieldSubModel();
     this.migrateLegacyActionSubModels();
@@ -312,6 +333,9 @@ export class TreeBlockModel extends CollectionBlockModel {
         model={container}
         items={buildTreeSearchActionItems}
         subModelKey="actions"
+        afterSubModelAdd={async () => {
+          await container.save();
+        }}
       >
         <FlowSettingsButton icon={<SettingOutlined />}>{this.translate('Actions')}</FlowSettingsButton>
       </AddSubModelButton>
@@ -365,6 +389,9 @@ export class TreeBlockModel extends CollectionBlockModel {
         model={container}
         items={buildTreeNodeActionItems}
         subModelKey="actions"
+        afterSubModelAdd={async () => {
+          await container.save();
+        }}
         afterSubModelInit={async (actionModel) => {
           actionModel.setStepParams('buttonSettings', 'general', { type: 'link', icon: null });
         }}
@@ -499,6 +526,7 @@ export class TreeBlockModel extends CollectionBlockModel {
       currentFieldModel.setProps(nextProps);
       currentFieldModel.setStepParams(nextStepParams);
       await currentFieldModel.dispatchEvent('beforeRender', undefined, { useCache: false });
+      await applyTitleFieldViewAcl(this.context, currentFieldModel, initParams);
       if (options.persist) {
         await currentFieldModel.save?.();
         await this.save();
@@ -527,6 +555,7 @@ export class TreeBlockModel extends CollectionBlockModel {
       await fieldModel.save?.();
     }
     await fieldModel.dispatchEvent('beforeRender', undefined, { useCache: false });
+    await applyTitleFieldViewAcl(this.context, fieldModel, initParams);
     if (options.persist) {
       await this.save();
     }
@@ -727,6 +756,10 @@ TreeBlockModel.registerFlow({
     dataScope: {
       use: 'dataScope',
       title: tExpr('Data scope'),
+    },
+    defaultSorting: {
+      use: 'sortingRule',
+      title: tExpr('Default sorting'),
     },
     connectFields: {
       use: treeConnectDataBlocks.name,

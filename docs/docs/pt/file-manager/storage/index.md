@@ -97,13 +97,13 @@ O registro do arquivo retorna diretamente o endereço gerado pelo serviço de ar
 https://storage.example.com/path/to/file.png
 ```
 
-Essa URL não passa pelo NocoBase e não verifica as permissões de visualização do registro. Para armazenamento local, é um endereço de arquivo estático local. Para armazenamento em nuvem, geralmente é um endereço de armazenamento de objetos ou CDN.
+Essa URL não verifica as permissões de visualização do registro. No armazenamento local, normalmente é uma URL legada `/storage/uploads/`, que exige login por padrão, mas não verifica novamente o registro individual. No armazenamento em nuvem, geralmente é um endereço de armazenamento de objetos ou CDN cuja política de acesso é controlada pelo serviço.
 
-Selecione a URL original somente quando Markdown, uma página externa ou um serviço de terceiros precisar usar diretamente o endereço de armazenamento.
+Selecione a URL original somente quando o consumidor não puder usar uma URL do NocoBase, por exemplo, se não puder seguir redirecionamentos `302` ou precisar explicitamente de um endereço de armazenamento de objetos ou CDN.
 
 :::warning Observação
 
-Depois que a URL original é selecionada, qualquer pessoa com uma URL válida pode ignorar as verificações de permissão do NocoBase e acessar o arquivo. Se a URL não tiver assinatura nem validade, verifique se o bucket e o arquivo permitem leitura pública.
+Depois que a URL original é selecionada, qualquer pessoa com uma URL válida pode ignorar as permissões do registro de arquivo do NocoBase. No armazenamento local, a URL legada ainda passa pela verificação de login de `/storage/uploads/`; expor diretamente o diretório por um Nginx personalizado pode ignorá-la. No armazenamento em nuvem, se a URL não tiver assinatura nem validade, verifique se o bucket e o arquivo permitem leitura pública.
 
 :::
 
@@ -113,17 +113,27 @@ Depois que a URL original é selecionada, qualquer pessoa com uma URL válida po
 
 Essa opção não altera a configuração de leitura pública do próprio serviço de armazenamento. Ela controla apenas se o NocoBase verifica as permissões do registro de arquivo.
 
+Markdown, páginas externas e serviços de terceiros também podem usar uma URL pública do NocoBase. Para uso externo, converta o caminho retornado pela API em uma URL absoluta que inclua o domínio do NocoBase e verifique se o consumidor consegue seguir redirecionamentos `302`.
+
+:::warning Comportamento do armazenamento local
+
+Uma URL do NocoBase para armazenamento local acaba redirecionando para `/storage/uploads/`. Permitir acesso público ignora as permissões do registro na etapa `/files/`, mas a URL legada ainda exige login por padrão. Para permitir leitura anônima dos arquivos locais, defina também `LEGACY_LOCAL_STORAGE_PUBLIC_ACCESS=true` e reinicie a aplicação. Essa variável expõe todo o caminho legado `/storage/uploads/`, não apenas o armazenamento selecionado; avalie todos os arquivos existentes antes de ativá-la.
+
+Ao usar Nginx personalizado, configure também `auth_request` para `/storage/uploads/`. Consulte [Proxy reverso Nginx](../../nocobase-cli/production/reverse-proxy/nginx.md) para a configuração completa.
+
+:::
+
 ### Como escolher
 
 | Caso de uso | URL do arquivo | Permitir acesso público |
 | --- | --- | --- |
 | Os arquivos devem seguir as permissões de função e de dados | URL do NocoBase | Desmarcado |
-| É necessário um endereço de arquivo do NocoBase que possa ser compartilhado publicamente | URL do NocoBase | Marcado |
-| Markdown, uma página externa ou um serviço de terceiros precisa ler diretamente o endereço de armazenamento | URL original | Não aplicável |
+| Markdown, uma página externa ou um serviço de terceiros precisa de acesso público ao arquivo | URL do NocoBase | Marcado |
+| O consumidor não pode seguir redirecionamentos `302` ou precisa usar diretamente o endereço de armazenamento | URL original | Não aplicável |
 
 :::warning Observação
 
-[Armazenamento local](./local), [Amazon S3](./amazon-s3), [Aliyun OSS](./aliyun-oss) e [Tencent COS](./tencent-cos) não geram URLs assinadas temporárias. Mesmo com a URL do NocoBase e as permissões do registro ativadas, quem já obteve o endereço original do serviço de armazenamento ainda pode acessar o arquivo diretamente.
+[Armazenamento local](./local), [Amazon S3](./amazon-s3), [Aliyun OSS](./aliyun-oss) e [Tencent COS](./tencent-cos) não geram URLs assinadas temporárias. O endereço original pode ignorar as permissões do registro. URLs locais legadas ainda exigem login por padrão; o acesso a uma URL original de armazenamento em nuvem depende da configuração de leitura pública do serviço.
 
 Para contratos, documentos de identidade, materiais internos ou outros arquivos que não devem ser públicos, use [S3 Pro](./s3-pro) e consulte sua configuração específica de controle de acesso.
 

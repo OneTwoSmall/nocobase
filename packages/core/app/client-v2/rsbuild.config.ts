@@ -222,6 +222,8 @@ export default defineConfig(({ command }) => {
     },
     output: {
       target: 'web',
+      overrideBrowserslist: ['chrome >= 87', 'edge >= 88', 'firefox >= 78', 'safari >= 14'],
+      polyfill: 'usage',
       distPath: {
         root: path.resolve(__dirname, `../dist/client/${MODERN_CLIENT_DIST_DIR}`),
         js: 'assets',
@@ -311,8 +313,13 @@ export default defineConfig(({ command }) => {
           middlewares.unshift((req, res, next) => {
             const [rawPathname = '/', query = ''] = String(req.url || '/').split('?');
             const pathname = normalizePathname(rawPathname);
+            // Strip APP_PUBLIC_PATH first so `/nocobase/admin` maps to `/nocobase/v/admin` instead of
+            // `/nocobase/v/nocobase/admin`, and `/nocobase/index.html` is still treated as a document entry.
+            const relativePath = isWithinBasePath(pathname, appPublicPath)
+              ? normalizePathname(pathname.slice(normalizePathname(appPublicPath).length))
+              : pathname;
             if (
-              !isClientDocumentEntryPath(pathname) ||
+              !isClientDocumentEntryPath(relativePath) ||
               pathname.startsWith('/.well-known/') ||
               pathname.startsWith(apiBasePath) ||
               pathname.startsWith(wsBasePath) ||
@@ -323,7 +330,7 @@ export default defineConfig(({ command }) => {
               return;
             }
             if (!isWithinBasePath(pathname, v2PublicPath)) {
-              const target = pathname === '/' ? v2PublicPath : `${v2PublicPath.replace(/\/$/, '')}${pathname}`;
+              const target = relativePath === '/' ? v2PublicPath : `${v2PublicPath.replace(/\/$/, '')}${relativePath}`;
               res.statusCode = 302;
               res.setHeader('Location', `${target}${query ? `?${query}` : ''}`);
               res.end();
@@ -344,6 +351,7 @@ export default defineConfig(({ command }) => {
     },
     tools: {
       rspack(config) {
+        config.module.rules.push({ test: /zxing_reader\.wasm$/, type: 'asset/resource' });
         config.target = ['web', 'es2020'];
         config.output.module = isBuild;
         config.output.chunkFormat = isBuild ? 'module' : 'array-push';
