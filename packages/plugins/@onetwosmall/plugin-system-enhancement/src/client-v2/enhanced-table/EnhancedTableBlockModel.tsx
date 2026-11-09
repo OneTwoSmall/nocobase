@@ -7,27 +7,23 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { observer } from '@formily/react';
 import { TableBlockModel } from '@nocobase/client-v2';
 import { tExpr } from '@nocobase/flow-engine';
-import { observer } from '@formily/react';
-import { useT } from '../locale';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { NAMESPACE } from '../constants';
+import { useT } from '../locale';
 import { isEnhancedTableEnabled } from '../state';
-import {
-  ENHANCED_TABLE_WRAPPER_CSS,
-  SelectionStatsPopup,
-  isNumericField,
-  useCellSelection,
-  useSummaryRowSync,
-  type SummaryColumnMeta,
-  type SummaryConfig,
-} from './tableDomEnhancer';
+import { createSummaryRenderer } from './SummaryRow';
+import { isNumericField, type SummaryColumnMeta, type SummaryConfig } from './summary';
+import { ENHANCED_TABLE_WRAPPER_CSS, SelectionStatsPopup, useCellSelection } from './tableDomEnhancer';
 // @ts-ignore
 import pkg from '../../../package.json';
 
 const ns = [pkg.name, NAMESPACE, 'client'];
 const EMPTY_CONFIG: SummaryConfig = {};
+const EMPTY_ROWS: any[] = [];
+const SUMMARY_FETCH_DEBOUNCE = 300;
 
 const EnhancedTableWrapper = observer(({ model, children }: { model?: any; children: React.ReactNode }) => {
   if (!isEnhancedTableEnabled()) {
@@ -43,9 +39,8 @@ const EnhancedTableWrapper = observer(({ model, children }: { model?: any; child
 const EnhancedTableWrapperInner = observer(({ model, children }: { model?: any; children: React.ReactNode }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const t = useT();
-  const [allPagesData, setAllPagesData] = useState<any[]>([]);
   const config: SummaryConfig = model?.props?.summaryConfig || EMPTY_CONFIG;
-  const configKey = JSON.stringify(config);
+  const hasConfig = Object.keys(config).length > 0;
 
   const columnMeta: SummaryColumnMeta = useMemo(() => {
     const numericFields = new Set<string>();
@@ -61,17 +56,17 @@ const EnhancedTableWrapperInner = observer(({ model, children }: { model?: any; 
     return { numericFields, columnTitles };
   }, [model]);
 
+  // 只跟随筛选/排序参数变化取数：分页或数据本身变化不应触发整表重新拉取
   const requestParamsStr = JSON.stringify((model?.resource as any)?.request?.params || {});
-  const resourceDataStr = JSON.stringify(model?.resource?.getData?.() || []);
 
   useEffect(() => {
-    if (Object.keys(config).length === 0 || typeof model?.resource?.runAction !== 'function') {
-      setAllPagesData([]);
+    if (!hasConfig || typeof model?.resource?.runAction !== 'function') {
+      model?.setProps?.('summaryRows', EMPTY_ROWS);
       return;
     }
 
     let isMounted = true;
-    const fetchAllData = async () => {
+    const timer = setTimeout(async () => {
       try {
         const currentOptions = (model.resource as any).getRefreshRequestOptions?.();
         const response = await model.resource.runAction('list', {
@@ -89,34 +84,19 @@ const EnhancedTableWrapperInner = observer(({ model, children }: { model?: any; 
         } else if (response && Array.isArray(response)) {
           rows = response;
         }
-        setAllPagesData(rows);
-      } catch (err) {
-        console.error('EnhancedTable fetchAllData Error: ', err);
+        model.setProps('summaryRows', rows);
+      } catch (error) {
+        console.warn('[system-enhancement] failed to load rows for the summary row', error);
       }
-    };
+    }, SUMMARY_FETCH_DEBOUNCE);
 
-    fetchAllData();
     return () => {
       isMounted = false;
+      clearTimeout(timer);
     };
-    // config 引用不稳定，用序列化字符串做依赖避免反复拉取
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model, configKey, requestParamsStr, resourceDataStr]);
+  }, [model, requestParamsStr, hasConfig]);
 
-  const labels = useMemo(
-    () => ({
-      sum: t('Sum'),
-      avg: t('Average'),
-      count: t('Count'),
-      min: t('Min'),
-      max: t('Max'),
-    }),
-    // 语言切换不频繁，避免 t 每次渲染变化导致汇总行同步反复重建
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [configKey],
-  );
-
-  useSummaryRowSync(containerRef, config, allPagesData, columnMeta, labels);
   const { selectionStats, mousePos } = useCellSelection(containerRef, columnMeta);
 
   return (
@@ -128,6 +108,12 @@ const EnhancedTableWrapperInner = observer(({ model, children }: { model?: any; 
 });
 
 export class EnhancedTableBlockModel extends TableBlockModel {
+  onInit(options: any) {
+    super.onInit(options);
+    // 提前挂载 summary 渲染函数：antd Table 只在自身渲染时读取该 prop，挂载后由汇总组件自行更新
+    this.setProps('summary', createSummaryRenderer(this));
+  }
+
   renderComponent() {
     const original = super.renderComponent();
     return <EnhancedTableWrapper model={this}>{original}</EnhancedTableWrapper>;
@@ -194,6 +180,7 @@ EnhancedTableBlockModel.registerFlow({
           }
         }
         ctx.model.setProps('summaryConfig', config);
+        ctx.model.setProps('summary', createSummaryRenderer(ctx.model));
       },
     },
   },

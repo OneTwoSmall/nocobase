@@ -8,9 +8,9 @@
  */
 
 /**
- * 校验 logoLinkUrl 是否为本系统内的安全相对路径。
- * 拒绝任意 scheme（javascript:、data: 等）、协议相对地址（//）、
- * 反斜杠与 ASCII 控制字符，防止存储型 XSS 与外部跳转。
+ * 校验 URL 是否为当前系统内的安全相对路径，client 与 server 共用同一份规则。
+ * 拒绝任意 scheme（javascript:、data: 等）、协议相对地址（//）、反斜杠与 ASCII 控制字符，
+ * 防止存储型 XSS 与外部跳转。
  */
 export function isSafeRelativeUrl(value: unknown): boolean {
   if (typeof value !== 'string') {

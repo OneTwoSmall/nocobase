@@ -9,7 +9,7 @@
 
 import { Plugin } from '@nocobase/server';
 import type { PluginFileManagerServer } from '@nocobase/plugin-file-manager';
-import { isSafeRelativeUrl } from './urlValidator';
+import { isSafeRelativeUrl } from '../common/urlValidator';
 // @ts-ignore
 import pkg from '../../package.json';
 
@@ -22,7 +22,7 @@ export class PluginSystemEnhancementServer extends Plugin {
       actions: ['systemEnhancementSettings:*'],
     });
 
-    this.app.acl.allow('systemEnhancementSettings', 'get', 'public');
+    this.app.acl.allowManager.allow('systemEnhancementSettings', 'get', 'public');
     // 仅拥有系统内置“界面配置权限”（ui.* snippet）的角色可修改系统级设置
     this.app.acl.allowManager.registerAllowCondition('se.allowConfigure', async (ctx) => {
       const roleName = ctx.state.currentRole;
@@ -36,11 +36,11 @@ export class PluginSystemEnhancementServer extends Plugin {
       const { allowed } = role.effectiveSnippets();
       return allowed.some((name) => name.startsWith('ui.'));
     });
-    this.app.acl.allow('systemEnhancementSettings', 'update', 'se.allowConfigure');
+    this.app.acl.allowManager.allow('systemEnhancementSettings', 'update', 'se.allowConfigure');
 
     // 登录页为匿名访问：背景图片通过专用公开接口输出（仅当前配置的那一个附件，且必须是图片），
     // 附件本身仍受 file-manager 的 ACL 保护；响应统一设置 nosniff 等安全头，SVG 额外加 CSP sandbox。
-    this.app.acl.allow('systemEnhancementSettings', 'getLoginBackgroundImage', 'public');
+    this.app.acl.allowManager.allow('systemEnhancementSettings', 'getLoginBackgroundImage', 'public');
     this.app.resourcer.registerActionHandler('systemEnhancementSettings:getLoginBackgroundImage', async (ctx, next) => {
       const settings = await this.db.getRepository('systemEnhancementSettings').findOne({
         filter: { id: 1 },
@@ -118,8 +118,8 @@ export class PluginSystemEnhancementServer extends Plugin {
           },
         });
       }
-    } catch {
-      // Non-critical
+    } catch (error) {
+      this.app.logger?.warn?.('[system-enhancement] failed to initialize the default settings', error);
     }
   }
 

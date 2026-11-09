@@ -11,6 +11,13 @@ const STYLE_ID = 'se-login-custom-style';
 const CLASS_NAME = 'se-login-custom';
 const AUTH_SEGMENTS = ['/signin', '/signup', '/forgot-password', '/reset-password'];
 
+/**
+ * 登录页表单容器的定位选择器：
+ * - 按 AuthLayout 的容器宽度特征匹配；
+ * - `:has(> h1)` 兜底，匹配直接包含标题的容器。
+ */
+const CONTAINER_SELECTORS = ['div[style*="max-width: 320px"]', 'div:has(> h1)'];
+
 export interface LoginPageStyleSettings {
   loginBackgroundImageId?: number;
   loginBackgroundImage?: { id?: number; url?: string } | null;
@@ -25,9 +32,13 @@ export interface LoginPageStyleSettings {
   loginBackgroundPosition?: string;
 }
 
+interface RouterLike {
+  subscribe?: (listener: (state?: unknown) => void) => () => void;
+}
+
 let current: LoginPageStyleSettings = {};
-let pollTimer: ReturnType<typeof setInterval> | null = null;
 let apiBaseUrl = '/';
+let routeBound = false;
 
 export function setApiBaseUrl(baseUrl: string) {
   apiBaseUrl = (baseUrl || '/').replace(/\/+$/, '') + '/';
@@ -43,6 +54,27 @@ export function getBackgroundUrl(s: LoginPageStyleSettings): string {
 function isAuthPage(): boolean {
   const p = window.location.pathname;
   return AUTH_SEGMENTS.some((s) => p.endsWith(s) || p.includes(`${s}?`));
+}
+
+/**
+ * 表单容器的位置与偏移：纯 CSS 实现，不再轮询扫描 DOM。
+ */
+function buildContainerRule(s: LoginPageStyleSettings): string {
+  const pos = s.loginFormPosition || 'center';
+  const ox = s.loginFormOffsetX ?? 0;
+  const oy = s.loginFormOffsetY ?? 0;
+  const marginLeft = pos === 'left' ? `${ox}px` : 'auto';
+  const marginRight = pos === 'right' ? `${ox}px` : 'auto';
+  const selector = CONTAINER_SELECTORS.map((sel) => `html.${CLASS_NAME} ${sel}`).join(',');
+
+  return [
+    `${selector}{`,
+    `padding-top:calc(20vh + ${oy}px)!important;`,
+    `padding-bottom:20vh!important;`,
+    `margin-left:${marginLeft}!important;`,
+    `margin-right:${marginRight}!important;`,
+    `}`,
+  ].join('');
 }
 
 function buildCSS(s: LoginPageStyleSettings): string {
@@ -71,6 +103,7 @@ function buildCSS(s: LoginPageStyleSettings): string {
     `html.${CLASS_NAME} #root>div>div{background:transparent!important;}`,
     `html.${CLASS_NAME} #root>div>div>div{background:transparent!important;}`,
     title.length ? `html.${CLASS_NAME} h1{${title.join(';')}}` : '',
+    buildContainerRule(s),
   ]
     .filter(Boolean)
     .join('');
@@ -93,107 +126,48 @@ function syncClass() {
   const html = document.documentElement;
   if (isAuthPage()) {
     html.classList.add(CLASS_NAME);
+    injectCSS();
   } else {
     html.classList.remove(CLASS_NAME);
   }
 }
 
-function applyContainerPos(s: LoginPageStyleSettings) {
-  const pos = s.loginFormPosition || 'center';
-  const ox = s.loginFormOffsetX ?? 0;
-  const oy = s.loginFormOffsetY ?? 0;
-
-  const divs = document.querySelectorAll<HTMLElement>('div');
-  for (const div of divs) {
-    const pt = div.style.paddingTop || getComputedStyle(div).paddingTop;
-    if (!pt || !pt.includes('vh')) continue;
-
-    div.style.setProperty('padding-top', `calc(20vh + ${oy}px)`, 'important');
-    div.style.setProperty('padding-bottom', '20vh', 'important');
-
-    switch (pos) {
-      case 'left':
-        div.style.setProperty('margin-left', `${ox}px`, 'important');
-        div.style.setProperty('margin-right', 'auto', 'important');
-        break;
-      case 'right':
-        div.style.setProperty('margin-left', 'auto', 'important');
-        div.style.setProperty('margin-right', `${ox}px`, 'important');
-        break;
-      default:
-        div.style.setProperty('margin-left', 'auto', 'important');
-        div.style.setProperty('margin-right', 'auto', 'important');
-        break;
-    }
-
-    let ancestor: HTMLElement | null = div.parentElement;
-    const root = document.getElementById('root');
-    while (ancestor && ancestor !== root && ancestor.tagName !== 'BODY') {
-      if (ancestor.tagName === 'DIV') {
-        ancestor.style.setProperty('background', 'transparent', 'important');
-        ancestor.style.setProperty('background-color', 'transparent', 'important');
-      }
-      ancestor = ancestor.parentElement;
-    }
-  }
-}
-
-function startPoll() {
-  if (pollTimer) return;
-  applyContainerPos(current);
-
-  let n = 0;
-  pollTimer = setInterval(() => {
-    n++;
-    if (n > 30 || !isAuthPage()) {
-      stopPoll();
-      return;
-    }
-    applyContainerPos(current);
-  }, 200);
-}
-
-function stopPoll() {
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
-}
-
 function handleRoute() {
   syncClass();
-  if (isAuthPage()) {
-    injectCSS();
-    startPoll();
-  } else {
-    stopPoll();
-  }
 }
 
 export function applyStyles(settings: LoginPageStyleSettings) {
   current = settings || {};
   handleRoute();
 }
-
 export function removeStyles() {
   removeCSS();
-  stopPoll();
+  document.documentElement.classList.remove(CLASS_NAME);
 }
 
-(function patchHistory() {
-  const originalPush = history.pushState.bind(history);
-  const originalReplace = history.replaceState.bind(history);
-
-  history.pushState = function (...args: Parameters<typeof originalPush>) {
-    const r = originalPush(...args);
+/**
+ * 订阅路由变化（优先使用 app 的 react-router 实例），避免改写 history 造成的全局副作用。
+ * 路由实例可能在插件加载之后才就绪，因此这里做有限次重试，最后退化为只监听浏览器前进后退。
+ */
+export function subscribeRouteChange(getRouter: () => RouterLike | undefined, retriesLeft = 5) {
+  if (routeBound) {
     handleRoute();
-    return r;
-  };
-  history.replaceState = function (...args: Parameters<typeof originalReplace>) {
-    const r = originalReplace(...args);
-    handleRoute();
-    return r;
-  };
+    return;
+  }
 
+  const unsubscribe = getRouter()?.subscribe?.(() => handleRoute());
+  if (typeof unsubscribe === 'function') {
+    routeBound = true;
+    handleRoute();
+    return;
+  }
+
+  if (retriesLeft > 0) {
+    setTimeout(() => subscribeRouteChange(getRouter, retriesLeft - 1), 200);
+    return;
+  }
+
+  routeBound = true;
   window.addEventListener('popstate', handleRoute);
-})();
+  handleRoute();
+}

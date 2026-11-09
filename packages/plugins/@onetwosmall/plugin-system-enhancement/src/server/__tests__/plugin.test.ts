@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Readable } from 'node:stream';
 import type { PluginFileManagerServer } from '@nocobase/plugin-file-manager';
 import { createMockServer, type MockServer } from '@nocobase/test';
-import { isSafeRelativeUrl } from '../urlValidator';
+import { isSafeRelativeUrl } from '../../common/urlValidator';
 
 async function createMockApp(): Promise<MockServer> {
   const app = await createMockServer({

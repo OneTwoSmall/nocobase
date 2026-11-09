@@ -9,21 +9,28 @@
 
 import type { Application } from '@nocobase/client-v2';
 import { Plugin } from '@nocobase/client-v2';
-import React from 'react';
 import { NAMESPACE } from './constants';
-import { ResizableHeader } from './ResizableHeader';
-import { applyStyles, setApiBaseUrl, type LoginPageStyleSettings } from './loginPageStyleInjector';
-import { applyLogoLink } from './logoLinkInjector';
-import { applyEnhancementFlags } from './state';
 import { EnhancedTableBlockModel } from './enhanced-table/EnhancedTableBlockModel';
+import { applyLogoLink } from './logoLinkInjector';
+import {
+  applyStyles,
+  setApiBaseUrl,
+  subscribeRouteChange,
+  type LoginPageStyleSettings,
+} from './loginPageStyleInjector';
+import { ResizableSubTableColumnModel, ResizableTableColumnModel } from './ResizableColumnModel';
+import { applyEnhancementFlags } from './state';
 
 export class PluginSystemEnhancementClientV2 extends Plugin<any> {
   async load() {
     const self = this as any;
 
-    // 覆盖注册原生 TableBlockModel：所有原生表格区块（含存量页面）都使用增强子类，
-    // 通过 renderComponent 包裹渲染汇总行，并提供 enhancedTableSettings 设置流程。
-    this.flowEngine.registerModels({ TableBlockModel: EnhancedTableBlockModel });
+    // 覆盖注册原生模型：存量页面的表格区块与列模型直接解析到增强子类，无需运行时改写原型。
+    this.flowEngine.registerModels({
+      TableBlockModel: EnhancedTableBlockModel,
+      TableColumnModel: ResizableTableColumnModel,
+      SubTableColumnModel: ResizableSubTableColumnModel,
+    });
 
     self.pluginSettingsManager.addMenuItem({
       key: NAMESPACE,
@@ -64,61 +71,12 @@ export class PluginSystemEnhancementClientV2 extends Plugin<any> {
         applyStyles(data as LoginPageStyleSettings);
         applyLogoLink(data?.logoLinkUrl || '', () => self.context.router?.navigate);
       }
-    } catch {
-      /* default */
+    } catch (error) {
+      console.warn('[system-enhancement] failed to load system enhancement settings', error);
     }
 
-    const { TableColumnModel } = await import('@nocobase/client-v2');
-    this.patchTableColumnModel(TableColumnModel);
-    this.patchSubTableColumnModel();
-  }
-
-  patchTableColumnModel(TableColumnModel: any) {
-    const original = TableColumnModel.prototype.getColumnProps;
-    TableColumnModel.prototype.getColumnProps = function () {
-      try {
-        const props = original.call(this);
-        if (!props || !props.title) return props;
-        const flowKey = (this.context as any)?.flowSettingsEnabled ? 'tableColumnSettings' : undefined;
-        return {
-          ...props,
-          title: (
-            <ResizableHeader model={this} width={(this as any).props?.width} persistFlowKey={flowKey}>
-              {props.title}
-            </ResizableHeader>
-          ),
-        };
-      } catch {
-        return original.call(this);
-      }
-    };
-  }
-
-  async patchSubTableColumnModel() {
-    try {
-      const { SubTableColumnModel } = await import('@nocobase/client-v2');
-      if (!SubTableColumnModel?.prototype?.getColumnProps) return;
-      const original = SubTableColumnModel.prototype.getColumnProps;
-      SubTableColumnModel.prototype.getColumnProps = function () {
-        try {
-          const props = original.call(this);
-          if (!props || !props.title) return props;
-          const flowKey = (this.context as any)?.flowSettingsEnabled ? 'subTableColumnSettings' : undefined;
-          return {
-            ...props,
-            title: (
-              <ResizableHeader model={this} width={(this as any).props?.width} persistFlowKey={flowKey}>
-                {props.title}
-              </ResizableHeader>
-            ),
-          };
-        } catch {
-          return original.call(this);
-        }
-      };
-    } catch {
-      /* not available */
-    }
+    // 登录页样式依赖路由变化：订阅 app 路由而不是改写 history，避免全局副作用
+    subscribeRouteChange(() => self.app?.router?.router ?? self.context?.router?.router);
   }
 }
 

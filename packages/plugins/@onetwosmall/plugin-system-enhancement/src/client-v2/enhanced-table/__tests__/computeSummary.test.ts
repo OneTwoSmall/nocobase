@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { computeAggregation, computeSummaryRow, getNumericValues, isNumericField } from '../tableDomEnhancer';
+import { computeAggregation, computeSummaryRow, getNumericValues, isNumericField } from '../summary';
 
 describe('isNumericField', () => {
   it('should detect numeric fields by type or interface', () => {
