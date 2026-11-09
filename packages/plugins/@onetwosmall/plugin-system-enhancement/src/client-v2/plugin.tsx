@@ -14,13 +14,8 @@ import { NAMESPACE } from './constants';
 import { ResizableHeader } from './ResizableHeader';
 import { applyStyles, setApiBaseUrl, type LoginPageStyleSettings } from './loginPageStyleInjector';
 import { applyLogoLink } from './logoLinkInjector';
-import { EnhancedTableBlockModel, setEnhancedTableEnabled } from './enhanced-table/EnhancedTableBlockModel';
-
-let enableTableColumnResize = true;
-
-export function setTableColumnResizeEnabled(enabled: boolean) {
-  enableTableColumnResize = enabled;
-}
+import { applyEnhancementFlags } from './state';
+import { EnhancedTableBlockModel } from './enhanced-table/EnhancedTableBlockModel';
 
 export class PluginSystemEnhancementClientV2 extends Plugin<any> {
   async load() {
@@ -64,8 +59,7 @@ export class PluginSystemEnhancementClientV2 extends Plugin<any> {
         method: 'get',
       });
       const data = res?.data?.data;
-      enableTableColumnResize = data?.enableTableColumnResize !== false;
-      setEnhancedTableEnabled(data?.enableEnhancedTable !== false);
+      applyEnhancementFlags(data);
       if (data) {
         applyStyles(data as LoginPageStyleSettings);
         applyLogoLink(data?.logoLinkUrl || '', () => self.context.router?.navigate);
@@ -82,7 +76,6 @@ export class PluginSystemEnhancementClientV2 extends Plugin<any> {
   patchTableColumnModel(TableColumnModel: any) {
     const original = TableColumnModel.prototype.getColumnProps;
     TableColumnModel.prototype.getColumnProps = function () {
-      if (!enableTableColumnResize) return original.call(this);
       try {
         const props = original.call(this);
         if (!props || !props.title) return props;
@@ -107,7 +100,6 @@ export class PluginSystemEnhancementClientV2 extends Plugin<any> {
       if (!SubTableColumnModel?.prototype?.getColumnProps) return;
       const original = SubTableColumnModel.prototype.getColumnProps;
       SubTableColumnModel.prototype.getColumnProps = function () {
-        if (!enableTableColumnResize) return original.call(this);
         try {
           const props = original.call(this);
           if (!props || !props.title) return props;

@@ -8,7 +8,9 @@
  */
 
 import { css } from '@emotion/css';
+import { observer } from '@formily/react';
 import React, { useEffect, useRef, useState } from 'react';
+import { isTableColumnResizeEnabled } from './state';
 
 const MIN_COLUMN_WIDTH = 50;
 
@@ -53,12 +55,14 @@ const resizeHandleClass = css`
   }
 `;
 
-export const ResizableHeader: React.FC<{
+type ResizableHeaderProps = {
   model: any;
   width: number;
   persistFlowKey?: string;
   children: React.ReactNode;
-}> = ({ model, width, persistFlowKey, children }) => {
+};
+
+const ResizableHeaderInner: React.FC<ResizableHeaderProps> = ({ model, width, persistFlowKey, children }) => {
   const [isResizing, setIsResizing] = useState(false);
   const [currentWidth, setCurrentWidth] = useState(width);
   const startXRef = useRef(0);
@@ -117,3 +121,13 @@ export const ResizableHeader: React.FC<{
     </div>
   );
 };
+
+/**
+ * 列宽拖拽表头。开关读取可观察 store，设置页关闭后已渲染的表头会立即回退为原生标题。
+ */
+export const ResizableHeader: React.FC<ResizableHeaderProps> = observer(({ children, ...rest }) => {
+  if (!isTableColumnResizeEnabled()) {
+    return <>{children}</>;
+  }
+  return <ResizableHeaderInner {...rest}>{children}</ResizableHeaderInner>;
+});

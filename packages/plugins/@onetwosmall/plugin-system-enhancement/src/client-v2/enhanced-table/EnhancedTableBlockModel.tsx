@@ -13,6 +13,7 @@ import { tExpr } from '@nocobase/flow-engine';
 import { observer } from '@formily/react';
 import { useT } from '../locale';
 import { NAMESPACE } from '../constants';
+import { isEnhancedTableEnabled } from '../state';
 import {
   ENHANCED_TABLE_WRAPPER_CSS,
   SelectionStatsPopup,
@@ -27,16 +28,6 @@ import pkg from '../../../package.json';
 
 const ns = [pkg.name, NAMESPACE, 'client'];
 const EMPTY_CONFIG: SummaryConfig = {};
-
-let enableEnhancedTable = true;
-
-export function setEnhancedTableEnabled(enabled: boolean) {
-  enableEnhancedTable = enabled;
-}
-
-function isEnhancedTableEnabled() {
-  return enableEnhancedTable;
-}
 
 const EnhancedTableWrapper = observer(({ model, children }: { model?: any; children: React.ReactNode }) => {
   if (!isEnhancedTableEnabled()) {

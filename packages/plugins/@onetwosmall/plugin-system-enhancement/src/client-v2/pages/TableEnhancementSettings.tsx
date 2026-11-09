@@ -12,8 +12,7 @@ import { Card, Form, Switch, Space, message } from 'antd';
 import { useFlowContext } from '@nocobase/flow-engine';
 import { useRequest } from 'ahooks';
 import { useT } from '../locale';
-import { setTableColumnResizeEnabled } from '../plugin';
-import { setEnhancedTableEnabled } from '../enhanced-table/EnhancedTableBlockModel';
+import { setEnhancedTableEnabled, setTableColumnResizeEnabled } from '../state';
 
 export default function TableEnhancementSettings() {
   const ctx = useFlowContext();
