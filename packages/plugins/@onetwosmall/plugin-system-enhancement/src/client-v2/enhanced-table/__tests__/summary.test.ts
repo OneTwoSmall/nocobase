@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { formatSummaryValue, isNumericField } from '../summary';
+import { extractSummaryValues, formatSummaryValue, isNumericField } from '../summary';
 
 describe('isNumericField', () => {
   it('should detect numeric fields by type or interface', () => {
@@ -35,5 +35,22 @@ describe('formatSummaryValue', () => {
     expect(formatSummaryValue(null)).toBe('');
     expect(formatSummaryValue(undefined)).toBe('');
     expect(formatSummaryValue(Number.NaN)).toBe('');
+  });
+});
+
+describe('extractSummaryValues', () => {
+  it('should unwrap the axios response and the data payload', () => {
+    const response = { data: { data: { amount: 49.5, count: 3 } }, status: 200 };
+    expect(extractSummaryValues(response)).toEqual({ amount: 49.5, count: 3 });
+  });
+
+  it('should accept a body that already is the value map', () => {
+    expect(extractSummaryValues({ data: { amount: 10 } })).toEqual({ amount: 10 });
+  });
+
+  it('should return an empty map for unexpected payloads', () => {
+    expect(extractSummaryValues(undefined)).toEqual({});
+    expect(extractSummaryValues({ data: null })).toEqual({});
+    expect(extractSummaryValues({ data: [1, 2] })).toEqual({});
   });
 });

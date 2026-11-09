@@ -39,3 +39,20 @@ export function formatSummaryValue(value: number | null | undefined): string {
   }
   return Number.isInteger(value) ? String(value) : value.toFixed(2);
 }
+
+export type SummaryValues = Record<string, number | null>;
+
+/**
+ * 从 `api.request` 的响应里取出汇总值。
+ * `api.request` 返回 axios 响应对象，响应体在 `response.data`，服务端又把数据包在 `{ data }` 里，
+ * 因此汇总值在 `response.data.data`；同时兼容直接返回映射的响应体。
+ */
+export function extractSummaryValues(response: unknown): SummaryValues {
+  const body = (response as { data?: unknown } | null | undefined)?.data;
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return {};
+  }
+  const payload = (body as { data?: unknown }).data;
+  const source = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : body;
+  return source as SummaryValues;
+}

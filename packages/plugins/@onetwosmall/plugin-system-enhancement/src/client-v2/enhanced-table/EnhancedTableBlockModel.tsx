@@ -16,11 +16,17 @@ import { NAMESPACE } from '../constants';
 import { useT } from '../locale';
 import { isEnhancedTableEnabled } from '../state';
 import { createSummaryRenderer } from './SummaryRow';
-import { isNumericField, type SummaryColumnMeta, type SummaryConfig } from './summary';
+import {
+  extractSummaryValues,
+  isNumericField,
+  type SummaryColumnMeta,
+  type SummaryConfig,
+  type SummaryValues,
+} from './summary';
 import { ENHANCED_TABLE_WRAPPER_CSS, SelectionStatsPopup, useCellSelection } from './tableDomEnhancer';
 const ns = [PLUGIN_NAME, NAMESPACE, 'client'];
 const EMPTY_CONFIG: SummaryConfig = {};
-const EMPTY_VALUES: Record<string, number | null> = {};
+const EMPTY_VALUES: SummaryValues = {};
 const SUMMARY_FETCH_DEBOUNCE = 300;
 
 const EnhancedTableWrapper = observer(({ model, children }: { model?: any; children: React.ReactNode }) => {
@@ -84,7 +90,7 @@ const EnhancedTableWrapperInner = observer(({ model, children }: { model?: any; 
           },
         });
         if (!isMounted) return;
-        model.setProps('summaryValues', response?.data || EMPTY_VALUES);
+        model.setProps('summaryValues', extractSummaryValues(response));
       } catch (error) {
         console.warn('[system-enhancement] failed to load the summary row values', error);
       }
