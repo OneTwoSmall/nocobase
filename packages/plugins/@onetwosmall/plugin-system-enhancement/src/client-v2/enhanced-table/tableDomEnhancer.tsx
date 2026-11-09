@@ -40,6 +40,69 @@ export const ENHANCED_TABLE_WRAPPER_CSS = css`
 `;
 
 /**
+ * 圈选时不应该抢走默认行为的元素：表单控件、链接、按钮、可编辑区域等。
+ */
+const INTERACTIVE_TARGET_SELECTOR = [
+  'button',
+  'a',
+  'input',
+  'textarea',
+  'select',
+  'label',
+  '[contenteditable="true"]',
+  '.ant-btn',
+  '.ant-select',
+  '.ant-picker',
+  '.ant-input',
+  '.ant-checkbox-wrapper',
+  '.ant-radio-wrapper',
+  '.ant-table-row-expand-icon',
+].join(',');
+
+/**
+ * 取鼠标事件对应的单元格。
+ * Firefox 在按住左键拖动时会把 mousemove 的 target 固定在按下时的元素上，导致圈选范围无法扩展，
+ * 因此优先用坐标取指针下的元素，取不到（或落在容器外）时再回退到事件目标。
+ */
+export function resolveCellFromEvent(
+  event: { clientX: number; clientY: number; target: EventTarget | null },
+  container?: HTMLElement | null,
+): HTMLElement | null {
+  const fromTarget = (event.target as HTMLElement | null)?.closest?.('td') as HTMLElement | null | undefined;
+  const pointed =
+    typeof document !== 'undefined' && typeof document.elementFromPoint === 'function'
+      ? document.elementFromPoint(event.clientX, event.clientY)
+      : null;
+  const fromPoint = (pointed as HTMLElement | null)?.closest?.('td') as HTMLElement | null | undefined;
+  if (fromPoint && (!container || container.contains(fromPoint))) {
+    return fromPoint;
+  }
+  return fromTarget ?? null;
+}
+
+/**
+ * 表头文字与数值列标题一致时，认为该 DOM 列参与统计。
+ */
+export function getNumericColumnIndexes(container: HTMLElement, columnMeta: SummaryColumnMeta): Set<number> {
+  const indexes = new Set<number>();
+  const firstRow = container.querySelector('.ant-table-thead tr');
+  if (!firstRow) {
+    return indexes;
+  }
+  for (let i = 0; i < firstRow.children.length; i++) {
+    const thText = (firstRow.children[i].textContent || '').trim();
+    for (const field of columnMeta.numericFields) {
+      const title = (columnMeta.columnTitles[field] || '').trim();
+      if (title && thText === title) {
+        indexes.add(i);
+        break;
+      }
+    }
+  }
+  return indexes;
+}
+
+/**
  * 单元格圈选统计：返回清理函数。
  * 依赖标准 antd Table 的 td/tr/tbody DOM 结构。
  */
@@ -50,6 +113,8 @@ export function setupCellSelection(
 ): () => void {
   const selectionState = {
     isSelecting: false,
+    // 只有从数值列开始的圈选才拦截原生文本选择，其它列保持浏览器默认行为
+    suppressNativeSelection: false,
     startCell: null as { r: number; c: number } | null,
     endCell: null as { r: number; c: number } | null,
   };
@@ -58,7 +123,8 @@ export function setupCellSelection(
     const tr = td.parentElement;
     if (!tr) return null;
     const tbody = tr.parentElement;
-    if (!tbody) return null;
+    // 只认数据行：thead/tfoot（含汇总行）里的单元格不参与圈选
+    if (!tbody || tbody.tagName !== 'TBODY') return null;
     return {
       r: Array.prototype.indexOf.call(tbody.children, tr),
       c: Array.prototype.indexOf.call(tr.children, td),
@@ -74,21 +140,7 @@ export function setupCellSelection(
     const maxC = Math.max(startCell.c, endCell.c);
 
     const selectedNumbers: number[] = [];
-    const domColumnToNumericKey: Record<number, boolean> = {};
-    const thead = container.querySelector('.ant-table-thead');
-    const firstRow = thead?.querySelector('tr');
-    if (firstRow) {
-      for (let i = 0; i < firstRow.children.length; i++) {
-        const thText = (firstRow.children[i].textContent || '').trim();
-        for (const field of columnMeta.numericFields) {
-          const title = (columnMeta.columnTitles[field] || '').trim();
-          if (title && thText === title) {
-            domColumnToNumericKey[i] = true;
-            break;
-          }
-        }
-      }
-    }
+    const numericColumnIndexes = getNumericColumnIndexes(container, columnMeta);
 
     container.querySelectorAll(`.${SELECTED_CELL_CLASS}`).forEach((el) => el.classList.remove(SELECTED_CELL_CLASS));
 
@@ -99,7 +151,7 @@ export function setupCellSelection(
         for (let c = minC; c <= maxC; c++) {
           const td = tr.children[c] as HTMLElement | undefined;
           if (!td) continue;
-          if (!domColumnToNumericKey[c]) continue;
+          if (!numericColumnIndexes.has(c)) continue;
 
           td.classList.add(SELECTED_CELL_CLASS);
           const cleanStr = (td.textContent || '').replace(/[¥$€£￥,% ]/g, '').trim();
@@ -128,24 +180,40 @@ export function setupCellSelection(
     }
   };
 
+  const clearSelection = () => {
+    container.querySelectorAll(`.${SELECTED_CELL_CLASS}`).forEach((el) => el.classList.remove(SELECTED_CELL_CLASS));
+    onChange(null, null);
+    selectionState.isSelecting = false;
+    selectionState.suppressNativeSelection = false;
+    selectionState.startCell = null;
+    selectionState.endCell = null;
+  };
+
   const onMouseDown = (e: MouseEvent) => {
     if (e.button !== 0) return;
     const target = e.target as HTMLElement;
     const td = target.closest('td');
 
     if (!td) {
-      container.querySelectorAll(`.${SELECTED_CELL_CLASS}`).forEach((el) => el.classList.remove(SELECTED_CELL_CLASS));
-      onChange(null, null);
-      selectionState.startCell = null;
-      selectionState.endCell = null;
+      clearSelection();
       return;
     }
 
-    if (target.closest('button, a, input, textarea, .ant-checkbox-wrapper, .ant-radio-wrapper')) return;
+    if (target.closest(INTERACTIVE_TARGET_SELECTOR)) return;
+
+    const coords = getCellCoords(td);
+    if (!coords) return;
+
+    // 在数值列上拦截默认行为：Firefox 否则会把这次拖动当成文本选择，并把后续 mousemove 的
+    // target 固定在按下时的单元格上，导致圈选范围无法扩展；其它列保持可正常选择文本。
+    selectionState.suppressNativeSelection = getNumericColumnIndexes(container, columnMeta).has(coords.c);
+    if (selectionState.suppressNativeSelection) {
+      e.preventDefault();
+    }
 
     selectionState.isSelecting = true;
-    selectionState.startCell = getCellCoords(td);
-    selectionState.endCell = selectionState.startCell;
+    selectionState.startCell = coords;
+    selectionState.endCell = coords;
     onChange(null, { x: e.clientX, y: e.clientY });
     updateSelection();
   };
@@ -153,32 +221,35 @@ export function setupCellSelection(
   const onMouseMove = (e: MouseEvent) => {
     if (!selectionState.isSelecting) return;
     onChange(null, { x: e.clientX, y: e.clientY });
-    const td = (e.target as HTMLElement).closest('td');
-    if (td) {
-      const coords = getCellCoords(td);
-      if (!coords) return;
-      selectionState.endCell = coords;
-      if (
-        selectionState.startCell &&
-        (selectionState.startCell.r !== coords.r || selectionState.startCell.c !== coords.c)
-      ) {
-        window.getSelection()?.removeAllRanges();
-      }
-      updateSelection();
+    const td = resolveCellFromEvent(e, container);
+    if (!td) return;
+    const coords = getCellCoords(td);
+    if (!coords) return;
+    selectionState.endCell = coords;
+    updateSelection();
+  };
+
+  // 从数值列开始的拖动禁止浏览器发起文本选择（Firefox 会因此中断 mousemove 序列）
+  const onSelectStart = (e: Event) => {
+    if (selectionState.isSelecting && selectionState.suppressNativeSelection) {
+      e.preventDefault();
     }
   };
 
   const onMouseUp = () => {
     selectionState.isSelecting = false;
+    selectionState.suppressNativeSelection = false;
   };
 
   container.addEventListener('mousedown', onMouseDown);
   container.addEventListener('mousemove', onMouseMove);
+  container.addEventListener('selectstart', onSelectStart);
   window.addEventListener('mouseup', onMouseUp);
 
   return () => {
     container.removeEventListener('mousedown', onMouseDown);
     container.removeEventListener('mousemove', onMouseMove);
+    container.removeEventListener('selectstart', onSelectStart);
     window.removeEventListener('mouseup', onMouseUp);
   };
 }
