@@ -25,11 +25,7 @@ function createModel(overrides: Record<string, any> = {}) {
   return {
     props: {
       summaryConfig: { amount: 'sum', count: 'count' },
-      summaryRows: [
-        { amount: 10, count: 1 },
-        { amount: 32.5, count: 2 },
-        { amount: 7, count: 3 },
-      ],
+      summaryValues: { amount: 49.5, count: 3 },
     },
     mapSubModels: (key: string, callback: (column: any) => void) => {
       if (key !== 'columns') {
@@ -64,7 +60,7 @@ describe('EnhancedTableSummary', () => {
 
     const cells = container.querySelectorAll('.ant-table-summary tbody td, .ant-table-summary td');
     expect(cells).toHaveLength(columns.length);
-    expect(cells[0].textContent).toContain('49.5');
+    expect(cells[0].textContent).toContain('49.50');
     expect(cells[0].textContent).toContain('SUM');
     expect(cells[1].textContent).toContain('3');
     expect(cells[1].textContent).toContain('COUNT');
@@ -77,7 +73,7 @@ describe('EnhancedTableSummary', () => {
 
     const cells = container.querySelectorAll('.ant-table-summary tbody td, .ant-table-summary td');
     expect(cells).toHaveLength(columns.length + 1);
-    expect(cells[1].textContent).toContain('49.5');
+    expect(cells[1].textContent).toContain('49.50');
   });
 
   it('should render nothing when no aggregation is configured', () => {

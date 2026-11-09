@@ -31,59 +31,11 @@ export function isNumericField(field: { type?: string; interface?: string }): bo
 }
 
 /**
- * 提取行中指定字段的数值集合（字符串数字会被转换，非数字被过滤）。
+ * 汇总行数值的展示格式：整数原样输出，小数保留两位；空值（无数据或字段不支持聚合）不显示。
  */
-export function getNumericValues(rows: any[], dataIndex: string): number[] {
-  return rows
-    .map((row: any) => {
-      const raw = row?.[dataIndex];
-      if (typeof raw === 'function') {
-        return null;
-      }
-      if (typeof raw === 'string') {
-        return Number(raw);
-      }
-      return typeof raw === 'number' ? raw : null;
-    })
-    .filter((v: any): v is number => typeof v === 'number' && !isNaN(v));
-}
-
-/**
- * 计算单列聚合值。
- */
-export function computeAggregation(values: number[], type: SummaryType): number | string {
-  if (!values || values.length === 0) {
+export function formatSummaryValue(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) {
     return '';
   }
-  let result: number;
-  switch (type) {
-    case 'sum':
-      result = values.reduce((a, b) => a + b, 0);
-      break;
-    case 'avg':
-      result = values.reduce((a, b) => a + b, 0) / values.length;
-      break;
-    case 'count':
-      return values.length;
-    case 'max':
-      result = Math.max(...values);
-      break;
-    case 'min':
-      result = Math.min(...values);
-      break;
-    default:
-      return '';
-  }
-  return Number.isInteger(result) ? result : parseFloat(result.toFixed(2));
-}
-
-/**
- * 计算汇总行数据：{ [dataIndex]: 聚合值 }。
- */
-export function computeSummaryRow(rows: any[], config: SummaryConfig): Record<string, number | string> {
-  const result: Record<string, number | string> = {};
-  for (const [dataIndex, type] of Object.entries(config)) {
-    result[dataIndex] = computeAggregation(getNumericValues(rows, dataIndex), type);
-  }
-  return result;
+  return Number.isInteger(value) ? String(value) : value.toFixed(2);
 }

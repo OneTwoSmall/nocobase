@@ -12,7 +12,7 @@ import { Table } from 'antd';
 import React from 'react';
 import { useT } from '../locale';
 import { isEnhancedTableEnabled } from '../state';
-import { computeSummaryRow, SUMMARY_LABELS, type SummaryConfig } from './summary';
+import { formatSummaryValue, SUMMARY_LABELS, type SummaryConfig } from './summary';
 
 interface SummaryColumn {
   name: string | null;
@@ -38,7 +38,7 @@ function getSummaryColumns(model: any, config: SummaryConfig): SummaryColumn[] {
 export const EnhancedTableSummary = observer(({ model }: { model: any }) => {
   const t = useT();
   const config: SummaryConfig = model?.props?.summaryConfig || {};
-  const rows: any[] = model?.props?.summaryRows || [];
+  const values: Record<string, number | null> = model?.props?.summaryValues || {};
 
   if (!isEnhancedTableEnabled() || Object.keys(config).length === 0) {
     return null;
@@ -48,7 +48,6 @@ export const EnhancedTableSummary = observer(({ model }: { model: any }) => {
   const hasRowSelection = !!model?.isRowSelectionEnabled?.();
   const leadingCells = hasRowSelection ? 1 : model?.getLeftAuxiliaryColumn?.() ? 1 : 0;
 
-  const values = computeSummaryRow(rows, config);
   const columns = getSummaryColumns(model, config);
 
   return (
@@ -58,8 +57,8 @@ export const EnhancedTableSummary = observer(({ model }: { model: any }) => {
           <Table.Summary.Cell key={`summary-leading-${index}`} index={index} />
         ))}
         {columns.map((column, index) => {
-          const value = column.name ? values[column.name] : undefined;
-          if (value === undefined || value === '') {
+          const value = column.name ? formatSummaryValue(values[column.name]) : '';
+          if (!value) {
             return <Table.Summary.Cell key={`summary-cell-${index}`} index={leadingCells + index} />;
           }
           return (

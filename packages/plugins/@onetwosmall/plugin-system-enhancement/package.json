@@ -1,6 +1,6 @@
 {
   "name": "@onetwosmall/plugin-system-enhancement",
-  "version": "2.3.0-beta.20",
+  "version": "2.3.0-beta.21",
   "main": "dist/server/index.js",
   "displayName": "System Enhancement",
   "displayName.zh-CN": "系统增强",
@@ -21,6 +21,7 @@
     "@nocobase/plugin-file-manager": "2.x",
     "@nocobase/server": "2.x",
     "@nocobase/test": "2.x",
+    "@nocobase/utils": "2.x",
     "ahooks": "*",
     "antd": "*",
     "react": "*"

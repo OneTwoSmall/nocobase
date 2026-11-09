@@ -8,16 +8,15 @@
  */
 
 import { tExpr as _tExpr, useFlowEngine } from '@nocobase/flow-engine';
+import { PLUGIN_NAME } from '../common/pluginMeta';
 import { NAMESPACE } from './constants';
-// @ts-ignore
-import pkg from './../../package.json';
 
 export function useT() {
   const engine = useFlowEngine();
   return (str: string, options?: Record<string, unknown>) =>
-    engine.context.t(str, { ns: [pkg.name, NAMESPACE, 'client'], ...options });
+    engine.context.t(str, { ns: [PLUGIN_NAME, NAMESPACE, 'client'], ...options });
 }
 
 export function tExpr(key: string) {
-  return _tExpr(key, { ns: [pkg.name, NAMESPACE, 'client'] });
+  return _tExpr(key, { ns: [PLUGIN_NAME, NAMESPACE, 'client'] });
 }

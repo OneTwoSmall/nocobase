@@ -11,18 +11,16 @@ import { observer } from '@formily/react';
 import { TableBlockModel } from '@nocobase/client-v2';
 import { tExpr } from '@nocobase/flow-engine';
 import React, { useEffect, useMemo, useRef } from 'react';
+import { PLUGIN_NAME } from '../../common/pluginMeta';
 import { NAMESPACE } from '../constants';
 import { useT } from '../locale';
 import { isEnhancedTableEnabled } from '../state';
 import { createSummaryRenderer } from './SummaryRow';
 import { isNumericField, type SummaryColumnMeta, type SummaryConfig } from './summary';
 import { ENHANCED_TABLE_WRAPPER_CSS, SelectionStatsPopup, useCellSelection } from './tableDomEnhancer';
-// @ts-ignore
-import pkg from '../../../package.json';
-
-const ns = [pkg.name, NAMESPACE, 'client'];
+const ns = [PLUGIN_NAME, NAMESPACE, 'client'];
 const EMPTY_CONFIG: SummaryConfig = {};
-const EMPTY_ROWS: any[] = [];
+const EMPTY_VALUES: Record<string, number | null> = {};
 const SUMMARY_FETCH_DEBOUNCE = 300;
 
 const EnhancedTableWrapper = observer(({ model, children }: { model?: any; children: React.ReactNode }) => {
@@ -56,37 +54,39 @@ const EnhancedTableWrapperInner = observer(({ model, children }: { model?: any; 
     return { numericFields, columnTitles };
   }, [model]);
 
-  // 只跟随筛选/排序参数变化取数：分页或数据本身变化不应触发整表重新拉取
+  // 只跟随筛选/排序参数变化聚合：分页或数据本身变化不应触发重新请求
   const requestParamsStr = JSON.stringify((model?.resource as any)?.request?.params || {});
+  const configKey = JSON.stringify(config);
 
   useEffect(() => {
-    if (!hasConfig || typeof model?.resource?.runAction !== 'function') {
-      model?.setProps?.('summaryRows', EMPTY_ROWS);
+    if (!hasConfig || typeof model?.context?.api?.request !== 'function') {
+      model?.setProps?.('summaryValues', EMPTY_VALUES);
       return;
     }
 
     let isMounted = true;
     const timer = setTimeout(async () => {
       try {
+        const collectionName = model?.collection?.name;
+        if (!collectionName) {
+          return;
+        }
         const currentOptions = (model.resource as any).getRefreshRequestOptions?.();
-        const response = await model.resource.runAction('list', {
-          method: 'get',
-          ...currentOptions,
-          params: {
-            ...(currentOptions?.params || {}),
-            paginate: false,
+        // 汇总由服务端聚合，前端不再整表取数；数据范围由服务端按当前用户对该集合的 list 权限合并
+        const response = await model.context.api.request({
+          url: 'systemEnhancementSettings:aggregate',
+          method: 'post',
+          data: {
+            collection: collectionName,
+            dataSourceKey: (model.resource as any).getDataSourceKey?.() || model.collection?.dataSourceKey || 'main',
+            filter: currentOptions?.params?.filter,
+            aggregations: config,
           },
         });
         if (!isMounted) return;
-        let rows: any[] = [];
-        if (response && Array.isArray(response.data)) {
-          rows = response.data;
-        } else if (response && Array.isArray(response)) {
-          rows = response;
-        }
-        model.setProps('summaryRows', rows);
+        model.setProps('summaryValues', response?.data || EMPTY_VALUES);
       } catch (error) {
-        console.warn('[system-enhancement] failed to load rows for the summary row', error);
+        console.warn('[system-enhancement] failed to load the summary row values', error);
       }
     }, SUMMARY_FETCH_DEBOUNCE);
 
@@ -95,7 +95,7 @@ const EnhancedTableWrapperInner = observer(({ model, children }: { model?: any; 
       clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model, requestParamsStr, hasConfig]);
+  }, [model, requestParamsStr, hasConfig, configKey]);
 
   const { selectionStats, mousePos } = useCellSelection(containerRef, columnMeta);
 
