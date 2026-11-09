@@ -12,6 +12,7 @@ import { Plugin } from '@nocobase/client-v2';
 import { NAMESPACE } from './constants';
 import { EnhancedTableBlockModel } from './enhanced-table/EnhancedTableBlockModel';
 import { applyLogoLink } from './logoLinkInjector';
+import { enterSystemIfAuthenticated } from './loginAutoEntry';
 import {
   applyStyles,
   setApiBaseUrl,
@@ -74,6 +75,8 @@ export class PluginSystemEnhancementClientV2 extends Plugin<any> {
     } catch (error) {
       console.warn('[system-enhancement] failed to load system enhancement settings', error);
     }
+    // 登录页刷新时若本地已有 token（例如同一浏览器里其它标签页刚登录），补一次鉴权并自动进入系统
+    enterSystemIfAuthenticated(self.context.api);
 
     // 登录页样式依赖路由变化：订阅 app 路由而不是改写 history，避免全局副作用
     subscribeRouteChange(() => self.app?.router?.router ?? self.context?.router?.router);
