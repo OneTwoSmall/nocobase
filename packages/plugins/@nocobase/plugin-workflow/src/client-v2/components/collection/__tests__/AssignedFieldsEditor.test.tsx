@@ -35,6 +35,16 @@ const {
       { name: 'website', type: 'text', uiSchema: { title: 'Website' }, interface: 'url' },
       { name: 'metadata', type: 'json', uiSchema: { title: 'Metadata' }, interface: 'textarea' },
       { name: 'score', type: 'integer', uiSchema: { title: 'Score' }, interface: 'integer' },
+      { name: 'publishedAt', type: 'date', uiSchema: { title: 'Published at' }, interface: 'datetime' },
+      { name: 'password', type: 'password', hidden: true, uiSchema: { title: 'Password' }, interface: 'password' },
+      {
+        name: 'internalToken',
+        type: 'string',
+        hidden: true,
+        uiSchema: { title: 'Internal token' },
+        interface: 'input',
+      },
+      { name: 'passwordWithoutSchema', type: 'password', hidden: true },
       { name: 'author', type: 'belongsTo', uiSchema: { title: 'Author' }, interface: 'm2o' },
       { name: 'comments', type: 'hasMany', uiSchema: { title: 'Comments' }, interface: 'o2m' },
     ]),
@@ -73,6 +83,7 @@ const {
         value?: unknown;
         onChange?: (value: unknown) => void;
         disabled?: boolean;
+        allowDateVariables?: boolean;
       }) => (
         <input
           aria-label={`value-${targetPath}`}
@@ -170,11 +181,11 @@ describe('AssignedFieldsEditor', () => {
         expect.anything(),
       );
       expect(mockFieldAssignValueInput).toHaveBeenCalledWith(
-        expect.objectContaining({ targetPath: 'metadata', value: { enabled: true } }),
+        expect.objectContaining({ targetPath: 'metadata', value: { enabled: true }, allowDateVariables: false }),
         expect.anything(),
       );
       expect(mockFieldAssignValueInput).toHaveBeenCalledWith(
-        expect.objectContaining({ targetPath: 'score', value: 1 }),
+        expect.objectContaining({ targetPath: 'score', value: 1, allowDateVariables: false }),
         expect.anything(),
       );
     });
@@ -203,6 +214,23 @@ describe('AssignedFieldsEditor', () => {
       }
     });
     expect(mockVariableHybridInput).not.toHaveBeenCalled();
+  });
+
+  it('disables unsupported built-in date variables for workflow field assignments', async () => {
+    render(
+      <AssignedFieldsEditor
+        collection="posts"
+        value={{ publishedAt: '2026-09-09T00:00:00.000Z' }}
+        onChange={() => undefined}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockFieldAssignValueInput).toHaveBeenCalledWith(
+        expect.objectContaining({ targetPath: 'publishedAt', allowDateVariables: false }),
+        expect.anything(),
+      );
+    });
   });
 
   it('adds unassigned collection fields with constant empty values', async () => {
@@ -238,6 +266,52 @@ describe('AssignedFieldsEditor', () => {
     expect(await screen.findByText('Status')).toBeTruthy();
     expect(screen.queryByText('Comments')).toBeNull();
   });
+
+  it('adds and edits hidden password fields while keeping other hidden fields unavailable', async () => {
+    const onChange = vi.fn();
+    const { rerender } = render(<AssignedFieldsEditor collection="posts" value={{}} onChange={onChange} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add field' }));
+    expect(await screen.findByRole('menuitem', { name: 'Password', exact: true })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Internal token' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'passwordWithoutSchema' })).toBeNull();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Password', exact: true }));
+    expect(onChange).toHaveBeenLastCalledWith({ password: '' });
+
+    rerender(<AssignedFieldsEditor collection="posts" value={{ password: '' }} onChange={onChange} />);
+    fireEvent.change(screen.getByLabelText('value-password'), { target: { value: 'new-password' } });
+    expect(onChange).toHaveBeenLastCalledWith({ password: 'new-password' });
+    expect(mockVariableHybridInput).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove field' }));
+    expect(onChange).toHaveBeenLastCalledWith({});
+  });
+
+  it.each(['saved-password', '{{$context.data.password}}'])(
+    'preserves saved password assignment %s when pruning unsupported fields',
+    async (password) => {
+      const onChange = vi.fn();
+
+      render(
+        <AssignedFieldsEditor
+          collection="posts"
+          value={{ password, comments: [1] }}
+          onChange={onChange}
+          fieldFilter={(field) => field.type !== 'hasMany'}
+          pruneFilteredValues
+        />,
+      );
+
+      await waitFor(() => {
+        expect(onChange).toHaveBeenCalledWith({ password });
+      });
+      expect(screen.getByLabelText('value-password')).toHaveValue(password);
+      expect(mockFieldAssignValueInput).toHaveBeenCalledWith(
+        expect.objectContaining({ targetPath: 'password', value: password, allowRunJS: false }),
+        expect.anything(),
+      );
+    },
+  );
 
   it('disables value changes, field removal, and field addition', async () => {
     const onChange = vi.fn();

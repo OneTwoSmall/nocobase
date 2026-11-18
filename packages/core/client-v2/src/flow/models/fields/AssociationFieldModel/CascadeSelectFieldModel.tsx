@@ -25,6 +25,7 @@ import { arrayMove, SortableContext, verticalListSortingStrategy, useSortable } 
 import { CSS } from '@dnd-kit/utilities';
 import { AssociationFieldModel } from './AssociationFieldModel';
 import { transformNestedData } from '../ClickableFieldModel';
+import { syncQuickEditPreventClose } from '../../../internal/utils/quickEditViewContainer';
 
 type CascadeHydrateStatus = 'pending' | 'done';
 
@@ -373,7 +374,12 @@ export class CascadeSelectInnerFieldModel extends AssociationFieldModel {
     this.setProps({ onPopupScroll: fn });
   }
   set onDropdownVisibleChange(fn) {
-    this.setProps({ onDropdownVisibleChange: fn });
+    this.setProps({
+      onDropdownVisibleChange: (visible: boolean) => {
+        syncQuickEditPreventClose(this, visible);
+        fn(visible);
+      },
+    });
   }
   set onSearch(fn) {
     this.setProps({ onSearch: fn });
@@ -745,7 +751,10 @@ async function originalHandler(ctx, params) {
 
     const targetInterface = targetLabelField.getInterfaceOptions();
 
-    const operator = targetInterface?.filterable?.operators?.[0]?.value || '$includes';
+    const operator =
+      targetLabelField.type === 'string' || targetLabelField.dataType === 'string'
+        ? '$includes'
+        : targetInterface?.filterable?.operators?.[0]?.value || '$includes';
 
     const searchText = ctx.inputArgs.searchText?.trim();
     const resource = ctx.model.resource;

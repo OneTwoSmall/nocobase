@@ -9,9 +9,9 @@
 
 import { RemoteSelect } from '@nocobase/client-v2';
 import { FlowContextSelector, type MetaTreeNode, useFlowContext } from '@nocobase/flow-engine';
-import { useMemoizedFn } from 'ahooks';
+import { useDebounce, useMemoizedFn } from 'ahooks';
 import { Space, theme } from 'antd';
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useWorkflowVariableOptions } from '../canvas/useWorkflowVariableOptions';
 import { WorkflowVariableTag } from '../canvas/WorkflowVariableTag';
 import { useT } from '../locale';
@@ -95,6 +95,8 @@ function UserPickerInput(props: {
 }) {
   const { disabled, onChange, value } = props;
   const ctx = useFlowContext();
+  const [search, setSearch] = useState('');
+  const debouncedSearch = useDebounce(search, { wait: 300 });
   const normalizedValue = typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : value;
 
   return (
@@ -102,8 +104,19 @@ function UserPickerInput(props: {
       disabled={disabled}
       value={normalizedValue}
       onChange={(next) => onChange?.(next == null ? '' : next)}
+      filterOption={false}
+      onSearch={setSearch}
+      refreshDeps={[debouncedSearch]}
       request={async () => {
-        const response = await ctx.api.resource('users').list();
+        const response = await ctx.api.resource('users').list(
+          debouncedSearch
+            ? {
+                filter: {
+                  nickname: { $includes: debouncedSearch },
+                },
+              }
+            : undefined,
+        );
         const payload = (response as UsersListResponse)?.data?.data;
         return Array.isArray(payload) ? payload : [];
       }}
@@ -161,7 +174,11 @@ function FixedUserSelect(props: {
   );
 }
 
-export function UsersSelect({
+type UsersSelectWithMetaTreeProps = Omit<UsersSelectProps, 'variableOptions'> & {
+  workflowVariableOptions: MetaTreeNode[];
+};
+
+function UsersSelectWithMetaTree({
   disabled,
   dropdownFooter = null,
   includeDateRangeVariable = true,
@@ -170,11 +187,11 @@ export function UsersSelect({
   popupClassName,
   transformVariableOptions,
   value,
-}: UsersSelectProps) {
+  workflowVariableOptions,
+}: UsersSelectWithMetaTreeProps) {
   const ctx = useFlowContext();
   const t = useT();
   const { token } = theme.useToken();
-  const workflowVariableOptions = useWorkflowVariableOptions({ types: [isUserKeyField] });
   const translate = useMemoizedFn((key: string) => ctx?.t?.(key, { ns: 'workflow', nsMode: 'fallback' }) ?? t(key));
   const metaTree = useMemo(() => {
     const roots = transformVariableOptions
@@ -214,6 +231,18 @@ export function UsersSelect({
       value={typeof value === 'string' || typeof value === 'number' ? value : ''}
     />
   );
+}
+
+function CanvasUsersSelect(props: Omit<UsersSelectProps, 'variableOptions'>) {
+  const workflowVariableOptions = useWorkflowVariableOptions({ types: [isUserKeyField] });
+  return <UsersSelectWithMetaTree {...props} workflowVariableOptions={workflowVariableOptions} />;
+}
+
+export function UsersSelect({ variableOptions, ...props }: UsersSelectProps) {
+  if (variableOptions !== undefined) {
+    return <UsersSelectWithMetaTree {...props} workflowVariableOptions={variableOptions} />;
+  }
+  return <CanvasUsersSelect {...props} />;
 }
 
 export default UsersSelect;

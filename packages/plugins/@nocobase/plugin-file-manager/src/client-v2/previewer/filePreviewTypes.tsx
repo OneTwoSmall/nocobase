@@ -793,13 +793,14 @@ const getPdfjsBaseUrl = () => {
 
 export const getPdfPreviewResourceOptions = (): Pick<
   DocumentInitParameters,
-  'cMapPacked' | 'cMapUrl' | 'standardFontDataUrl'
+  'cMapPacked' | 'cMapUrl' | 'standardFontDataUrl' | 'wasmUrl'
 > => {
   const pdfjsBaseUrl = getPdfjsBaseUrl();
   return {
     cMapPacked: true,
     cMapUrl: `${pdfjsBaseUrl}cmaps/`,
     standardFontDataUrl: `${pdfjsBaseUrl}standard_fonts/`,
+    wasmUrl: `${pdfjsBaseUrl}wasm/`,
   };
 };
 
@@ -1019,12 +1020,12 @@ const PdfPreviewer = ({ file }: FilePreviewerProps) => {
       } catch (error) {
         throw new PdfPreviewError('resources', 'Failed to load PDF.js worker.', error);
       }
-      // Security hardening: no eval-based font hinting and no XFA scripting.
+      // Security hardening: no XFA scripting. pdf.js 6 dropped `isEvalSupported` along with its last
+      // eval-based code paths, so eval is now disabled unconditionally and needs no opt-out here.
       // getDocument detaches the buffer it receives, so hand it a copy and keep `data` for later pages.
       const metaTask = pdfjs.getDocument({
         data: data.slice(0),
         ...getPdfPreviewResourceOptions(),
-        isEvalSupported: false,
         enableXfa: false,
         useWasm: false,
         worker: session.worker,
@@ -1131,7 +1132,6 @@ const PdfPreviewer = ({ file }: FilePreviewerProps) => {
           task = pdfjs.getDocument({
             data: session.data.slice(0),
             ...getPdfPreviewResourceOptions(),
-            isEvalSupported: false,
             enableXfa: false,
             useWasm: false,
             worker: session.worker,
@@ -1317,7 +1317,7 @@ const AudioPreviewer = ({ file }: FilePreviewerProps) => {
     return null;
   }
   return (
-    <audio controls>
+    <audio key={src} controls>
       <source src={src} type={file?.type || file?.mimetype} />
       {t('Your browser does not support the audio tag.')}
     </audio>

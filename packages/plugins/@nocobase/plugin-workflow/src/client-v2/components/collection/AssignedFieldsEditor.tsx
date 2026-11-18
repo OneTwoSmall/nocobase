@@ -20,11 +20,13 @@ import {
   parseWorkflowValueToPath,
   workflowVariableConverters,
 } from '../../canvas/workflowVariableConverters';
+import { AssociationValueInput } from './AssociationValueInput';
 import { useT } from '../../locale';
 import {
   getCollection,
   getCollectionFields,
   hasFieldName,
+  isAssociationField,
   parseCollectionName,
   type CollectionTriggerField,
 } from './utils';
@@ -138,7 +140,7 @@ export function AssignedFieldsEditor({
     () =>
       getCollectionFields(flowEngine.context.dataSourceManager, collection)
         .filter(hasFieldName)
-        .filter((field) => !field.hidden && Boolean(field.uiSchema)) as AssignedField[],
+        .filter((field) => (!field.hidden || field.type === 'password') && Boolean(field.uiSchema)) as AssignedField[],
     [collection, flowEngine],
   );
   const fields = useMemo(() => allFields.filter(fieldFilter), [allFields, fieldFilter]);
@@ -225,7 +227,15 @@ export function AssignedFieldsEditor({
               layout="vertical"
               colon
             >
-              {supportsVariableExpression(field) ? (
+              {isAssociationField(field) ? (
+                <AssociationValueInput
+                  collection={collection}
+                  field={field}
+                  value={normalizedValue[field.name]}
+                  onChange={(nextValue) => updateValue(field.name, nextValue)}
+                  disabled={mergedDisabled}
+                />
+              ) : supportsVariableExpression(field) ? (
                 <VariableHybridInput
                   value={normalizeVariableExpressionValue(normalizedValue[field.name])}
                   onChange={(nextValue) => updateValue(field.name, nextValue)}
@@ -241,6 +251,7 @@ export function AssignedFieldsEditor({
                   value={normalizedValue[field.name]}
                   onChange={(nextValue) => updateValue(field.name, nextValue)}
                   allowRunJS={false}
+                  allowDateVariables={false}
                   disabled={mergedDisabled}
                   variableConverters={{
                     resolvePathFromValue: (currentValue) =>
